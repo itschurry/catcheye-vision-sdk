@@ -5,18 +5,22 @@
 #include <opencv2/core/mat.hpp>
 
 #include "catcheye/input/frame.hpp"
+#include "catcheye/protocol/frame_message.hpp"
 
 namespace catcheye::runtime {
 
 struct ProcessContext {
     std::uint64_t frame_index = 0;
     bool should_process = true;
-    bool needs_visualization = false;
+    bool needs_preview = false;
+    bool needs_publish = false;
 };
 
 struct ProcessOutput {
-    bool has_visualization = false;
-    cv::Mat visualization;
+    bool has_preview = false;
+    cv::Mat preview_frame;
+    bool has_message = false;
+    catcheye::protocol::FrameMessage message;
 };
 
 class FrameProcessor {

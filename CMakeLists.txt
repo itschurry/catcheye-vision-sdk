@@ -12,4 +12,6 @@ set(CATCHEYE_VISION_INPUT_BUILD_TESTS ${CATCHEYE_VISION_SDK_BUILD_TESTS} CACHE B
 set(CATCHEYE_VISION_RUNTIME_BUILD_TESTS ${CATCHEYE_VISION_SDK_BUILD_TESTS} CACHE BOOL "" FORCE)
 
 add_subdirectory(libs/vision-input)
+add_subdirectory(libs/vision-protocol)
+add_subdirectory(libs/vision-transport)
 add_subdirectory(libs/vision-runtime)

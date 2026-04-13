@@ -8,6 +8,7 @@
 
 #include "catcheye/input/frame_source.hpp"
 #include "catcheye/runtime/frame_processing_runner.hpp"
+#include "catcheye/transport/result_publisher.hpp"
 
 namespace {
 
@@ -74,9 +75,15 @@ class FakeProcessor final : public catcheye::runtime::FrameProcessor {
         should_process_flags.push_back(context.should_process);
 
         catcheye::runtime::ProcessOutput output;
-        if (context.needs_visualization && !frame.empty()) {
-            output.has_visualization = true;
-            output.visualization = frame.image.clone();
+        if (context.needs_preview && !frame.empty()) {
+            output.has_preview = true;
+            output.preview_frame = frame.image.clone();
+        }
+        if (context.needs_publish && !frame.empty()) {
+            output.has_message = true;
+            output.message.stream_name = "test";
+            output.message.metadata_json = "{}";
+            output.message.payload = {1, 2, 3};
         }
         return output;
     }
@@ -87,7 +94,7 @@ class FakeProcessor final : public catcheye::runtime::FrameProcessor {
     std::vector<bool> should_process_flags;
 };
 
-class FakePreviewSink final : public catcheye::runtime::PreviewSink {
+class FakePublisher final : public catcheye::transport::ResultPublisher {
    public:
     bool start() override
     {
@@ -100,7 +107,7 @@ class FakePreviewSink final : public catcheye::runtime::PreviewSink {
         stopped = true;
     }
 
-    void publish(const cv::Mat&) override
+    void publish(const catcheye::protocol::FrameMessage&, const catcheye::transport::PublishContext&) override
     {
         ++publish_calls;
     }
@@ -124,7 +131,7 @@ TEST_CASE(frame_processing_runner_returns_zero_after_processing_before_eos)
     std::unique_ptr<catcheye::runtime::FrameProcessor> processor(processor_ptr);
 
     catcheye::runtime::FrameProcessingRunner runner(
-        {.render_preview = false, .stream_preview = false},
+        {.render_preview = false},
         std::move(source),
         std::move(processor));
 
@@ -142,7 +149,7 @@ TEST_CASE(frame_processing_runner_returns_one_on_read_error)
     std::unique_ptr<catcheye::runtime::FrameProcessor> processor = std::make_unique<FakeProcessor>();
 
     catcheye::runtime::FrameProcessingRunner runner(
-        {.render_preview = false, .stream_preview = false},
+        {.render_preview = false},
         std::move(source),
         std::move(processor));
 
@@ -158,7 +165,7 @@ TEST_CASE(frame_processing_runner_returns_one_when_source_ends_before_first_fram
     std::unique_ptr<catcheye::runtime::FrameProcessor> processor = std::make_unique<FakeProcessor>();
 
     catcheye::runtime::FrameProcessingRunner runner(
-        {.render_preview = false, .stream_preview = false},
+        {.render_preview = false},
         std::move(source),
         std::move(processor));
 
@@ -178,7 +185,7 @@ TEST_CASE(frame_processing_runner_applies_process_cadence)
     std::unique_ptr<catcheye::runtime::FrameProcessor> processor(processor_ptr);
 
     catcheye::runtime::FrameProcessingRunner runner(
-        {.render_preview = false, .stream_preview = false, .process_every_n_frames = 2},
+        {.render_preview = false, .process_every_n_frames = 2},
         std::move(source),
         std::move(processor));
 
@@ -189,7 +196,7 @@ TEST_CASE(frame_processing_runner_applies_process_cadence)
     test_support::assert_true(processor_ptr->should_process_flags[2], "frame 3 should process");
 }
 
-TEST_CASE(frame_processing_runner_publishes_preview_frames_to_sink)
+TEST_CASE(frame_processing_runner_publishes_messages_to_publisher)
 {
     auto source = std::make_unique<FakeFrameSource>(
         std::vector<catcheye::input::FrameReadStatus> {
@@ -198,17 +205,17 @@ TEST_CASE(frame_processing_runner_publishes_preview_frames_to_sink)
             catcheye::input::FrameReadStatus::EndOfStream,
         });
     std::unique_ptr<catcheye::runtime::FrameProcessor> processor = std::make_unique<FakeProcessor>();
-    auto* sink_ptr = new FakePreviewSink();
-    std::unique_ptr<catcheye::runtime::PreviewSink> sink(sink_ptr);
+    auto* publisher_ptr = new FakePublisher();
+    std::unique_ptr<catcheye::transport::ResultPublisher> publisher(publisher_ptr);
 
     catcheye::runtime::FrameProcessingRunner runner(
-        {.render_preview = false, .stream_preview = true},
+        {.render_preview = false},
         std::move(source),
         std::move(processor),
-        std::move(sink));
+        std::move(publisher));
 
-    test_support::assert_true(runner.run() == 0, "runner should succeed with preview sink");
-    test_support::assert_true(sink_ptr->started, "sink should start");
-    test_support::assert_true(sink_ptr->stopped, "sink should stop");
-    test_support::assert_true(sink_ptr->publish_calls == 2, "sink should receive processed preview frames");
+    test_support::assert_true(runner.run() == 0, "runner should succeed with publisher");
+    test_support::assert_true(publisher_ptr->started, "publisher should start");
+    test_support::assert_true(publisher_ptr->stopped, "publisher should stop");
+    test_support::assert_true(publisher_ptr->publish_calls == 2, "publisher should receive processed messages");
 }

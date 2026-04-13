@@ -54,6 +54,8 @@ target_include_directories(catcheye_vision_runtime
 target_link_libraries(catcheye_vision_runtime
     PUBLIC
         catcheye::vision_input
+        catcheye::vision_protocol
+        catcheye::vision_transport
         ${OpenCV_LIBS}
 )
 
