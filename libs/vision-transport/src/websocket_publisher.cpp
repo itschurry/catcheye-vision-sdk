@@ -164,7 +164,7 @@ std::string websocket_accept_key(std::string_view client_key)
 std::string find_header_value(std::string_view request, std::string_view header_name)
 {
     const std::string needle = std::string(header_name) + ":";
-    std::istringstream iss(std::string(request));
+    std::istringstream iss {std::string(request)};
     std::string line;
     while (std::getline(iss, line)) {
         if (!line.empty() && line.back() == '\r') {

@@ -8,6 +8,8 @@
 
 - `libs/vision-input`
   - 이미지, 비디오, 카메라 입력을 `FrameSource`로 통일한다
+- `libs/vision-roi`
+  - ROI 타입, 기하 계산, JSON 파싱, 검증, 포함 판정을 공통화한다
 - `libs/vision-protocol`
   - 프레임 payload와 metadata를 공통 메시지 형식으로 정의한다
 - `libs/vision-transport`
