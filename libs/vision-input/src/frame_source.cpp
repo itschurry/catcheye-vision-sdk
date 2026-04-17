@@ -148,7 +148,7 @@ std::unique_ptr<FrameSource> create_frame_source(InputSourceConfig config) {
 
 std::string default_camera_pipeline() {
     return "libcamerasrc ! "
-           "video/x-raw,width=1280,height=720,framerate=15/1,format=NV12 ! "
+           "video/x-raw,width=640,height=480,framerate=15/1,format=NV12 ! "
            "videoflip video-direction=vert ! "
            "videoconvert ! "
            "video/x-raw,format=BGR ! "
