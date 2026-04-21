@@ -36,8 +36,6 @@ if(NOT TARGET catcheye_vision_input AND NOT TARGET catcheye::vision_input)
     )
 endif()
 
-find_package(OpenCV REQUIRED)
-
 add_library(catcheye_vision_runtime STATIC
     src/frame_processing_runner.cpp
 )
@@ -48,7 +46,6 @@ target_include_directories(catcheye_vision_runtime
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
-        ${OpenCV_INCLUDE_DIRS}
 )
 
 target_link_libraries(catcheye_vision_runtime
@@ -56,7 +53,6 @@ target_link_libraries(catcheye_vision_runtime
         catcheye::vision_input
         catcheye::vision_protocol
         catcheye::vision_transport
-        ${OpenCV_LIBS}
 )
 
 target_compile_features(catcheye_vision_runtime PUBLIC cxx_std_20)

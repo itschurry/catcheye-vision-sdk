@@ -6,8 +6,12 @@ project(catcheye-vision-transport
     LANGUAGES CXX
 )
 
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(GSTREAMER REQUIRED gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0)
+pkg_check_modules(GST_RTSP REQUIRED gstreamer-rtsp-server-1.0)
+
 add_library(catcheye_vision_transport STATIC
-    src/websocket_publisher.cpp
+    src/rtsp_publisher.cpp
 )
 add_library(catcheye::vision_transport ALIAS catcheye_vision_transport)
 set_target_properties(catcheye_vision_transport PROPERTIES EXPORT_NAME vision_transport)
@@ -16,11 +20,16 @@ target_include_directories(catcheye_vision_transport
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
+        ${GSTREAMER_INCLUDE_DIRS}
+        ${GST_RTSP_INCLUDE_DIRS}
 )
 
 target_link_libraries(catcheye_vision_transport
     PUBLIC
         catcheye::vision_protocol
+        catcheye::vision_input
+        ${GSTREAMER_LIBRARIES}
+        ${GST_RTSP_LIBRARIES}
 )
 
 target_compile_features(catcheye_vision_transport PUBLIC cxx_std_20)

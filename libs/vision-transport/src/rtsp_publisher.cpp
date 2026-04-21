@@ -1,0 +1,211 @@
+#include "catcheye/transport/rtsp_publisher.hpp"
+
+#include <cstring>
+#include <string>
+
+#include <gst/app/gstappsrc.h>
+#include <gst/video/video.h>
+
+namespace catcheye::transport {
+namespace {
+
+void ensure_gst_init()
+{
+    static bool initialized = false;
+    if (!initialized) {
+        gst_init(nullptr, nullptr);
+        initialized = true;
+    }
+}
+
+bool is_valid_nv12_frame(
+    const catcheye::input::Frame& frame,
+    const RtspPublisherConfig& config)
+{
+    if (frame.width != config.width || frame.height != config.height) {
+        return false;
+    }
+    if (frame.format != catcheye::input::PixelFormat::NV12) {
+        return false;
+    }
+    if (frame.stride < frame.width || frame.stride <= 0) {
+        return false;
+    }
+    if ((frame.width % 2) != 0 || (frame.height % 2) != 0) {
+        return false;
+    }
+
+    const std::size_t expected_size =
+        catcheye::input::frame_data_size(frame.format, frame.stride, frame.height);
+    return frame.data.size() == expected_size;
+}
+
+} // namespace
+
+RtspPublisher::RtspPublisher(RtspPublisherConfig config)
+    : config_(std::move(config))
+{
+    ensure_gst_init();
+}
+
+RtspPublisher::~RtspPublisher()
+{
+    stop();
+}
+
+bool RtspPublisher::start()
+{
+    if (running_) {
+        return true;
+    }
+    if (config_.framerate <= 0 || config_.width <= 0 || config_.height <= 0) {
+        return false;
+    }
+    if ((config_.width % 2) != 0 || (config_.height % 2) != 0) {
+        return false;
+    }
+
+    server_ = gst_rtsp_server_new();
+    gst_rtsp_server_set_address(server_, config_.bind_address.c_str());
+    gst_rtsp_server_set_service(server_, std::to_string(config_.port).c_str());
+
+    // Pipeline: appsrc (raw NV12) → hardware H.264 encoder → RTP packetizer
+    const std::string pipeline =
+        "( appsrc name=src format=time is-live=true do-timestamp=true"
+        " caps=video/x-raw,format=NV12"
+        ",width=" + std::to_string(config_.width)
+        + ",height=" + std::to_string(config_.height)
+        + ",framerate=" + std::to_string(config_.framerate) + "/1"
+        + " ! v4l2h264enc extra-controls=\"controls,repeat_sequence_header=1\""
+        + " ! video/x-h264,level=(string)4"
+        + " ! rtph264pay name=pay0 pt=96 )";
+
+    GstRTSPMediaFactory* factory = gst_rtsp_media_factory_new();
+    gst_rtsp_media_factory_set_launch(factory, pipeline.c_str());
+    gst_rtsp_media_factory_set_shared(factory, TRUE);
+
+    g_signal_connect(factory, "media-configure",
+                     G_CALLBACK(RtspPublisher::on_media_configure), this);
+
+    GstRTSPMountPoints* mounts = gst_rtsp_server_get_mount_points(server_);
+    gst_rtsp_mount_points_add_factory(mounts, config_.mount_point.c_str(), factory);
+    g_object_unref(mounts);
+
+    if (gst_rtsp_server_attach(server_, nullptr) == 0) {
+        g_object_unref(server_);
+        server_ = nullptr;
+        return false;
+    }
+
+    loop_ = g_main_loop_new(nullptr, FALSE);
+    running_ = true;
+    server_thread_ = std::thread(&RtspPublisher::server_loop, this);
+    return true;
+}
+
+void RtspPublisher::stop()
+{
+    const bool was_running = running_.exchange(false);
+
+    if (was_running && loop_) {
+        g_main_loop_quit(loop_);
+    }
+    if (was_running && server_thread_.joinable()) {
+        server_thread_.join();
+    }
+    if (loop_) {
+        g_main_loop_unref(loop_);
+        loop_ = nullptr;
+    }
+    {
+        std::lock_guard<std::mutex> lock(appsrc_mutex_);
+        if (appsrc_) {
+            gst_object_unref(appsrc_);
+            appsrc_ = nullptr;
+        }
+    }
+    if (server_) {
+        g_object_unref(server_);
+        server_ = nullptr;
+    }
+}
+
+void RtspPublisher::publish(
+    const catcheye::input::Frame& frame,
+    const catcheye::protocol::FrameMessage& /*message*/,
+    const PublishContext& context)
+{
+    if (!running_ || frame.empty() || !is_valid_nv12_frame(frame, config_)) {
+        return;
+    }
+
+    GstElement* appsrc = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(appsrc_mutex_);
+        if (!appsrc_) {
+            return;
+        }
+        appsrc = GST_ELEMENT(gst_object_ref(appsrc_));
+    }
+
+    GstBuffer* buffer = gst_buffer_new_allocate(nullptr, frame.data.size(), nullptr);
+    GstMapInfo map;
+    if (!gst_buffer_map(buffer, &map, GST_MAP_WRITE)) {
+        gst_buffer_unref(buffer);
+        gst_object_unref(appsrc);
+        return;
+    }
+
+    std::memcpy(map.data, frame.data.data(), frame.data.size());
+    gst_buffer_unmap(buffer, &map);
+
+    // Tell the encoder the actual memory layout when stride differs from width.
+    // Without this, GStreamer assumes stride == width and misinterprets padded rows.
+    const gsize plane_offsets[2] = {
+        0,
+        static_cast<gsize>(frame.stride) * static_cast<gsize>(frame.height),
+    };
+    const gint plane_strides[2] = {frame.stride, frame.stride};
+    gst_buffer_add_video_meta_full(
+        buffer,
+        GST_VIDEO_FRAME_FLAG_NONE,
+        GST_VIDEO_FORMAT_NV12,
+        static_cast<guint>(frame.width),
+        static_cast<guint>(frame.height),
+        2,
+        plane_offsets,
+        plane_strides);
+
+    const guint64 fr = static_cast<guint64>(config_.framerate);
+    GST_BUFFER_PTS(buffer) =
+        gst_util_uint64_scale(context.frame_index, GST_SECOND, fr);
+    GST_BUFFER_DURATION(buffer) = gst_util_uint64_scale(1, GST_SECOND, fr);
+
+    gst_app_src_push_buffer(GST_APP_SRC(appsrc), buffer);
+    gst_object_unref(appsrc);
+}
+
+void RtspPublisher::on_media_configure(
+    GstRTSPMediaFactory* /*factory*/,
+    GstRTSPMedia* media,
+    gpointer user_data)
+{
+    auto* self = static_cast<RtspPublisher*>(user_data);
+    GstElement* element = gst_rtsp_media_get_element(media);
+    GstElement* new_appsrc = gst_bin_get_by_name_recurse_up(GST_BIN(element), "src");
+    {
+        std::lock_guard<std::mutex> lock(self->appsrc_mutex_);
+        if (self->appsrc_) {
+            gst_object_unref(self->appsrc_);
+        }
+        self->appsrc_ = new_appsrc;
+    }
+    gst_object_unref(element);
+}
+
+void RtspPublisher::server_loop()
+{
+    g_main_loop_run(loop_);
+}
+
+} // namespace catcheye::transport

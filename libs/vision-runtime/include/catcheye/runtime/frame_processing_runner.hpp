@@ -1,7 +1,6 @@
 #pragma once
 
 #include <memory>
-#include <string>
 
 #include "catcheye/input/frame_source.hpp"
 #include "catcheye/runtime/frame_processor.hpp"
@@ -10,8 +9,6 @@
 namespace catcheye::runtime {
 
 struct RuntimeConfig {
-    std::string window_name = "Vision Runtime";
-    bool render_preview = true;
     int process_every_n_frames = 1;
 };
 
