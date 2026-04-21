@@ -27,7 +27,7 @@ bool is_valid_nv12_frame(
     if (frame.format != catcheye::input::PixelFormat::NV12) {
         return false;
     }
-    if (frame.stride < frame.width || frame.stride <= 0) {
+    if (frame.stride != config.width || frame.stride <= 0) {
         return false;
     }
     if ((frame.width % 2) != 0 || (frame.height % 2) != 0) {
@@ -35,7 +35,7 @@ bool is_valid_nv12_frame(
     }
 
     const std::size_t expected_size =
-        catcheye::input::frame_data_size(frame.format, frame.stride, frame.height);
+        catcheye::input::frame_data_size(frame.format, config.width, config.height);
     return frame.data.size() == expected_size;
 }
 
@@ -104,15 +104,12 @@ bool RtspPublisher::start()
 
 void RtspPublisher::stop()
 {
-    if (!running_) {
-        return;
-    }
-    running_ = false;
+    const bool was_running = running_.exchange(false);
 
-    if (loop_) {
+    if (was_running && loop_) {
         g_main_loop_quit(loop_);
     }
-    if (server_thread_.joinable()) {
+    if (was_running && server_thread_.joinable()) {
         server_thread_.join();
     }
     if (loop_) {
@@ -162,8 +159,9 @@ void RtspPublisher::publish(
     gst_buffer_unmap(buffer, &map);
 
     const guint64 fr = static_cast<guint64>(config_.framerate);
-    GST_BUFFER_PTS(buffer) = context.frame_index * GST_SECOND / fr;
-    GST_BUFFER_DURATION(buffer) = GST_SECOND / fr;
+    GST_BUFFER_PTS(buffer) =
+        gst_util_uint64_scale(context.frame_index, GST_SECOND, fr);
+    GST_BUFFER_DURATION(buffer) = gst_util_uint64_scale(1, GST_SECOND, fr);
 
     gst_app_src_push_buffer(GST_APP_SRC(appsrc), buffer);
     gst_object_unref(appsrc);
