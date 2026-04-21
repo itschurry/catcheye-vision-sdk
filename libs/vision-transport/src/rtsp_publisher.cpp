@@ -4,6 +4,7 @@
 #include <string>
 
 #include <gst/app/gstappsrc.h>
+#include <gst/video/video.h>
 
 namespace catcheye::transport {
 namespace {
@@ -27,7 +28,7 @@ bool is_valid_nv12_frame(
     if (frame.format != catcheye::input::PixelFormat::NV12) {
         return false;
     }
-    if (frame.stride != config.width || frame.stride <= 0) {
+    if (frame.stride < frame.width || frame.stride <= 0) {
         return false;
     }
     if ((frame.width % 2) != 0 || (frame.height % 2) != 0) {
@@ -35,7 +36,7 @@ bool is_valid_nv12_frame(
     }
 
     const std::size_t expected_size =
-        catcheye::input::frame_data_size(frame.format, config.width, config.height);
+        catcheye::input::frame_data_size(frame.format, frame.stride, frame.height);
     return frame.data.size() == expected_size;
 }
 
@@ -157,6 +158,23 @@ void RtspPublisher::publish(
 
     std::memcpy(map.data, frame.data.data(), frame.data.size());
     gst_buffer_unmap(buffer, &map);
+
+    // Tell the encoder the actual memory layout when stride differs from width.
+    // Without this, GStreamer assumes stride == width and misinterprets padded rows.
+    const gsize plane_offsets[2] = {
+        0,
+        static_cast<gsize>(frame.stride) * static_cast<gsize>(frame.height),
+    };
+    const gint plane_strides[2] = {frame.stride, frame.stride};
+    gst_buffer_add_video_meta_full(
+        buffer,
+        GST_VIDEO_FRAME_FLAG_NONE,
+        GST_VIDEO_FORMAT_NV12,
+        static_cast<guint>(frame.width),
+        static_cast<guint>(frame.height),
+        2,
+        plane_offsets,
+        plane_strides);
 
     const guint64 fr = static_cast<guint64>(config_.framerate);
     GST_BUFFER_PTS(buffer) =

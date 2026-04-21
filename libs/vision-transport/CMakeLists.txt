@@ -7,7 +7,7 @@ project(catcheye-vision-transport
 )
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(GSTREAMER REQUIRED gstreamer-1.0 gstreamer-app-1.0)
+pkg_check_modules(GSTREAMER REQUIRED gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0)
 pkg_check_modules(GST_RTSP REQUIRED gstreamer-rtsp-server-1.0)
 
 add_library(catcheye_vision_transport STATIC
