@@ -1,68 +1,67 @@
 #include "test_support.hpp"
 
-#include <filesystem>
+#include "catcheye/input/gstreamer_source.hpp"
+#include "catcheye/input/libcamera_source.hpp"
 
-#include <opencv2/core.hpp>
-#include <opencv2/imgcodecs.hpp>
-
-#include "catcheye/input/frame_source.hpp"
-
-namespace fs = std::filesystem;
-
-namespace {
-
-fs::path make_temp_png_path()
+TEST_CASE(gstreamer_source_reads_frame_from_test_pattern)
 {
-    return fs::temp_directory_path() / "catcheye_vision_input_test.png";
-}
+    catcheye::input::GStreamerSource source({
+        .pipeline = catcheye::input::GStreamerSource::test_pattern_pipeline(64, 48),
+    });
 
-} // namespace
-
-TEST_CASE(image_file_source_reads_once_then_reaches_end_of_stream)
-{
-    const fs::path image_path = make_temp_png_path();
-    const cv::Mat image(8, 12, CV_8UC3, cv::Scalar(1, 2, 3));
-    const bool write_ok = cv::imwrite(image_path.string(), image);
-    test_support::assert_true(write_ok, "failed to create temporary PNG");
-
-    catcheye::input::InputSourceConfig config;
-    config.type = catcheye::input::InputSourceType::ImageFile;
-    config.uri = image_path.string();
-    catcheye::input::ImageFileSource source(config);
-
-    test_support::assert_true(source.open(), "image source open should succeed");
+    test_support::assert_true(source.open(), "test pattern source should open");
+    test_support::assert_true(source.is_open(), "source should report open");
 
     catcheye::input::Frame frame;
-    test_support::assert_true(source.read(frame) == catcheye::input::FrameReadStatus::Ok, "first read should succeed");
-    test_support::assert_true(frame.width() == image.cols, "frame width mismatch");
-    test_support::assert_true(frame.height() == image.rows, "frame height mismatch");
-    test_support::assert_true(source.read(frame) == catcheye::input::FrameReadStatus::EndOfStream, "second read should end");
+    const auto status = source.read(frame);
+    test_support::assert_true(
+        status == catcheye::input::FrameReadStatus::Ok, "first read should succeed");
+    test_support::assert_true(frame.width == 64, "frame width mismatch");
+    test_support::assert_true(frame.height == 48, "frame height mismatch");
+    test_support::assert_true(frame.stride > 0, "stride should be positive");
+    test_support::assert_true(!frame.empty(), "frame data should not be empty");
+    test_support::assert_true(
+        frame.format == catcheye::input::PixelFormat::NV12, "format should be NV12");
 
     source.close();
-    fs::remove(image_path);
+    test_support::assert_true(!source.is_open(), "source should report closed");
 }
 
-TEST_CASE(opencv_capture_source_fails_for_missing_video_file)
+TEST_CASE(gstreamer_source_fails_for_invalid_pipeline)
 {
-    catcheye::input::InputSourceConfig config;
-    config.type = catcheye::input::InputSourceType::VideoFile;
-    config.uri = "/tmp/catcheye_missing_video.mp4";
-    catcheye::input::OpenCvCaptureSource source(config);
-
-    test_support::assert_true(!source.open(), "missing video should fail to open");
+    catcheye::input::GStreamerSource source({.pipeline = "not_a_real_element"});
+    test_support::assert_true(!source.open(), "invalid pipeline should fail to open");
 }
 
-TEST_CASE(opencv_capture_source_fails_for_invalid_camera_pipeline)
+TEST_CASE(gstreamer_source_describe_contains_pipeline)
 {
-    catcheye::input::InputSourceConfig config;
-    config.type = catcheye::input::InputSourceType::Camera;
-    config.camera_pipeline = "this_is_not_a_valid_gstreamer_pipeline";
-    catcheye::input::OpenCvCaptureSource source(config);
-
-    test_support::assert_true(!source.open(), "invalid camera pipeline should fail to open");
+    const std::string pipeline =
+        catcheye::input::GStreamerSource::test_pattern_pipeline(64, 48);
+    catcheye::input::GStreamerSource source({.pipeline = pipeline});
+    const std::string desc = source.describe();
+    test_support::assert_true(
+        desc.find("gstreamer:") != std::string::npos,
+        "describe should contain gstreamer: prefix");
 }
 
-TEST_CASE(default_camera_pipeline_is_not_empty)
+TEST_CASE(libcamera_source_describe_before_open)
 {
-    test_support::assert_true(!catcheye::input::default_camera_pipeline().empty(), "default camera pipeline should not be empty");
+    catcheye::input::LibCameraSource source({.camera_id = "test-id"});
+    const std::string desc = source.describe();
+    test_support::assert_true(
+        desc.find("libcamera:") != std::string::npos,
+        "describe should contain libcamera: prefix");
+}
+
+TEST_CASE(gstreamer_pipeline_helpers_are_not_empty)
+{
+    test_support::assert_true(
+        !catcheye::input::GStreamerSource::test_pattern_pipeline().empty(),
+        "test pattern pipeline should not be empty");
+    test_support::assert_true(
+        !catcheye::input::GStreamerSource::usb_camera_pipeline().empty(),
+        "usb camera pipeline should not be empty");
+    test_support::assert_true(
+        !catcheye::input::GStreamerSource::video_file_pipeline("/tmp/test.mp4").empty(),
+        "video file pipeline should not be empty");
 }

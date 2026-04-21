@@ -4,8 +4,6 @@
 #include <utility>
 #include <vector>
 
-#include <opencv2/core.hpp>
-
 #include "catcheye/input/frame_source.hpp"
 #include "catcheye/runtime/frame_processing_runner.hpp"
 #include "catcheye/transport/result_publisher.hpp"
@@ -17,16 +15,10 @@ class FakeFrameSource final : public catcheye::input::FrameSource {
     explicit FakeFrameSource(std::vector<catcheye::input::FrameReadStatus> statuses)
         : statuses_(std::move(statuses)) {}
 
-    bool open() override
-    {
-        opened_ = true;
-        return true;
-    }
-
-    bool is_open() const override
-    {
-        return opened_;
-    }
+    bool open() override { opened_ = true; return true; }
+    bool is_open() const override { return opened_; }
+    void close() override { opened_ = false; }
+    std::string describe() const override { return "fake"; }
 
     catcheye::input::FrameReadStatus read(catcheye::input::Frame& frame) override
     {
@@ -36,21 +28,18 @@ class FakeFrameSource final : public catcheye::input::FrameSource {
 
         const auto status = statuses_[index_++];
         if (status == catcheye::input::FrameReadStatus::Ok) {
-            frame.image = cv::Mat(16, 16, CV_8UC3, cv::Scalar(1, 2, 3)).clone();
-            frame.format = catcheye::input::PixelFormat::BGR;
+            constexpr int W = 16;
+            constexpr int H = 16;
+            frame.width = W;
+            frame.height = H;
+            frame.stride = W;
+            frame.format = catcheye::input::PixelFormat::NV12;
             frame.timestamp = 42;
+            frame.data.assign(
+                catcheye::input::frame_data_size(frame.format, frame.stride, frame.height),
+                static_cast<std::uint8_t>(128));
         }
         return status;
-    }
-
-    void close() override
-    {
-        opened_ = false;
-    }
-
-    std::string describe() const override
-    {
-        return "fake";
     }
 
    private:
@@ -61,11 +50,7 @@ class FakeFrameSource final : public catcheye::input::FrameSource {
 
 class FakeProcessor final : public catcheye::runtime::FrameProcessor {
    public:
-    bool initialize() override
-    {
-        initialized = true;
-        return initialize_result;
-    }
+    bool initialize() override { initialized = true; return initialize_result; }
 
     catcheye::runtime::ProcessOutput process(
         const catcheye::input::Frame& frame,
@@ -75,15 +60,10 @@ class FakeProcessor final : public catcheye::runtime::FrameProcessor {
         should_process_flags.push_back(context.should_process);
 
         catcheye::runtime::ProcessOutput output;
-        if (context.needs_preview && !frame.empty()) {
-            output.has_preview = true;
-            output.preview_frame = frame.image.clone();
-        }
         if (context.needs_publish && !frame.empty()) {
             output.has_message = true;
             output.message.stream_name = "test";
             output.message.metadata_json = "{}";
-            output.message.payload = {1, 2, 3};
         }
         return output;
     }
@@ -96,18 +76,13 @@ class FakeProcessor final : public catcheye::runtime::FrameProcessor {
 
 class FakePublisher final : public catcheye::transport::ResultPublisher {
    public:
-    bool start() override
-    {
-        started = true;
-        return start_result;
-    }
+    bool start() override { started = true; return start_result; }
+    void stop() override { stopped = true; }
 
-    void stop() override
-    {
-        stopped = true;
-    }
-
-    void publish(const catcheye::protocol::FrameMessage&, const catcheye::transport::PublishContext&) override
+    void publish(
+        const catcheye::input::Frame&,
+        const catcheye::protocol::FrameMessage&,
+        const catcheye::transport::PublishContext&) override
     {
         ++publish_calls;
     }
@@ -131,7 +106,7 @@ TEST_CASE(frame_processing_runner_returns_zero_after_processing_before_eos)
     std::unique_ptr<catcheye::runtime::FrameProcessor> processor(processor_ptr);
 
     catcheye::runtime::FrameProcessingRunner runner(
-        {.render_preview = false},
+        {},
         std::move(source),
         std::move(processor));
 
@@ -148,10 +123,7 @@ TEST_CASE(frame_processing_runner_returns_one_on_read_error)
         });
     std::unique_ptr<catcheye::runtime::FrameProcessor> processor = std::make_unique<FakeProcessor>();
 
-    catcheye::runtime::FrameProcessingRunner runner(
-        {.render_preview = false},
-        std::move(source),
-        std::move(processor));
+    catcheye::runtime::FrameProcessingRunner runner({}, std::move(source), std::move(processor));
 
     test_support::assert_true(runner.run() == 1, "runner should fail on read error");
 }
@@ -164,10 +136,7 @@ TEST_CASE(frame_processing_runner_returns_one_when_source_ends_before_first_fram
         });
     std::unique_ptr<catcheye::runtime::FrameProcessor> processor = std::make_unique<FakeProcessor>();
 
-    catcheye::runtime::FrameProcessingRunner runner(
-        {.render_preview = false},
-        std::move(source),
-        std::move(processor));
+    catcheye::runtime::FrameProcessingRunner runner({}, std::move(source), std::move(processor));
 
     test_support::assert_true(runner.run() == 1, "runner should fail on empty input");
 }
@@ -185,12 +154,13 @@ TEST_CASE(frame_processing_runner_applies_process_cadence)
     std::unique_ptr<catcheye::runtime::FrameProcessor> processor(processor_ptr);
 
     catcheye::runtime::FrameProcessingRunner runner(
-        {.render_preview = false, .process_every_n_frames = 2},
+        {.process_every_n_frames = 2},
         std::move(source),
         std::move(processor));
 
     test_support::assert_true(runner.run() == 0, "runner should succeed");
-    test_support::assert_true(processor_ptr->should_process_flags.size() == 3, "processor should see three frames");
+    test_support::assert_true(
+        processor_ptr->should_process_flags.size() == 3, "processor should see three frames");
     test_support::assert_true(processor_ptr->should_process_flags[0], "frame 1 should process");
     test_support::assert_true(!processor_ptr->should_process_flags[1], "frame 2 should skip");
     test_support::assert_true(processor_ptr->should_process_flags[2], "frame 3 should process");
@@ -209,7 +179,7 @@ TEST_CASE(frame_processing_runner_publishes_messages_to_publisher)
     std::unique_ptr<catcheye::transport::ResultPublisher> publisher(publisher_ptr);
 
     catcheye::runtime::FrameProcessingRunner runner(
-        {.render_preview = false},
+        {},
         std::move(source),
         std::move(processor),
         std::move(publisher));
@@ -217,5 +187,6 @@ TEST_CASE(frame_processing_runner_publishes_messages_to_publisher)
     test_support::assert_true(runner.run() == 0, "runner should succeed with publisher");
     test_support::assert_true(publisher_ptr->started, "publisher should start");
     test_support::assert_true(publisher_ptr->stopped, "publisher should stop");
-    test_support::assert_true(publisher_ptr->publish_calls == 2, "publisher should receive processed messages");
+    test_support::assert_true(
+        publisher_ptr->publish_calls == 2, "publisher should receive processed messages");
 }
