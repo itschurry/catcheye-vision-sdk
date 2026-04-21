@@ -17,6 +17,28 @@ void ensure_gst_init()
     }
 }
 
+bool is_valid_nv12_frame(
+    const catcheye::input::Frame& frame,
+    const RtspPublisherConfig& config)
+{
+    if (frame.width != config.width || frame.height != config.height) {
+        return false;
+    }
+    if (frame.format != catcheye::input::PixelFormat::NV12) {
+        return false;
+    }
+    if (frame.stride < frame.width || frame.stride <= 0) {
+        return false;
+    }
+    if ((frame.width % 2) != 0 || (frame.height % 2) != 0) {
+        return false;
+    }
+
+    const std::size_t expected_size =
+        catcheye::input::frame_data_size(frame.format, frame.stride, frame.height);
+    return frame.data.size() == expected_size;
+}
+
 } // namespace
 
 RtspPublisher::RtspPublisher(RtspPublisherConfig config)
@@ -34,6 +56,12 @@ bool RtspPublisher::start()
 {
     if (running_) {
         return true;
+    }
+    if (config_.framerate <= 0 || config_.width <= 0 || config_.height <= 0) {
+        return false;
+    }
+    if ((config_.width % 2) != 0 || (config_.height % 2) != 0) {
+        return false;
     }
 
     server_ = gst_rtsp_server_new();
@@ -91,9 +119,12 @@ void RtspPublisher::stop()
         g_main_loop_unref(loop_);
         loop_ = nullptr;
     }
-    if (appsrc_) {
-        gst_object_unref(appsrc_);
-        appsrc_ = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(appsrc_mutex_);
+        if (appsrc_) {
+            gst_object_unref(appsrc_);
+            appsrc_ = nullptr;
+        }
     }
     if (server_) {
         g_object_unref(server_);
@@ -106,14 +137,24 @@ void RtspPublisher::publish(
     const catcheye::protocol::FrameMessage& /*message*/,
     const PublishContext& context)
 {
-    if (!running_ || !appsrc_ || frame.empty()) {
+    if (!running_ || frame.empty() || !is_valid_nv12_frame(frame, config_)) {
         return;
+    }
+
+    GstElement* appsrc = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(appsrc_mutex_);
+        if (!appsrc_) {
+            return;
+        }
+        appsrc = GST_ELEMENT(gst_object_ref(appsrc_));
     }
 
     GstBuffer* buffer = gst_buffer_new_allocate(nullptr, frame.data.size(), nullptr);
     GstMapInfo map;
     if (!gst_buffer_map(buffer, &map, GST_MAP_WRITE)) {
         gst_buffer_unref(buffer);
+        gst_object_unref(appsrc);
         return;
     }
 
@@ -124,7 +165,8 @@ void RtspPublisher::publish(
     GST_BUFFER_PTS(buffer) = context.frame_index * GST_SECOND / fr;
     GST_BUFFER_DURATION(buffer) = GST_SECOND / fr;
 
-    gst_app_src_push_buffer(GST_APP_SRC(appsrc_), buffer);
+    gst_app_src_push_buffer(GST_APP_SRC(appsrc), buffer);
+    gst_object_unref(appsrc);
 }
 
 void RtspPublisher::on_media_configure(
@@ -134,7 +176,14 @@ void RtspPublisher::on_media_configure(
 {
     auto* self = static_cast<RtspPublisher*>(user_data);
     GstElement* element = gst_rtsp_media_get_element(media);
-    self->appsrc_ = gst_bin_get_by_name_recurse_up(GST_BIN(element), "src");
+    GstElement* new_appsrc = gst_bin_get_by_name_recurse_up(GST_BIN(element), "src");
+    {
+        std::lock_guard<std::mutex> lock(self->appsrc_mutex_);
+        if (self->appsrc_) {
+            gst_object_unref(self->appsrc_);
+        }
+        self->appsrc_ = new_appsrc;
+    }
     gst_object_unref(element);
 }
 

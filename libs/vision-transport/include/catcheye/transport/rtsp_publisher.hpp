@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -47,6 +48,7 @@ class RtspPublisher final : public ResultPublisher {
     RtspPublisherConfig config_;
     GstRTSPServer* server_ = nullptr;
     GstElement* appsrc_ = nullptr;
+    std::mutex appsrc_mutex_;
     GMainLoop* loop_ = nullptr;
     std::thread server_thread_;
     std::atomic<bool> running_ {false};
