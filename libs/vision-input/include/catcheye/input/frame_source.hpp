@@ -7,6 +7,18 @@
 
 namespace catcheye::input {
 
+enum class InputSourceType {
+    Camera,
+    ImageFile,
+    VideoFile,
+};
+
+struct InputSourceConfig {
+    InputSourceType type = InputSourceType::Camera;
+    std::string uri;
+    std::string camera_pipeline;
+};
+
 enum class FrameReadStatus {
     Ok,
     EndOfStream,
@@ -23,5 +35,8 @@ class FrameSource {
     virtual void close() = 0;
     virtual std::string describe() const = 0;
 };
+
+std::unique_ptr<FrameSource> create_frame_source(const InputSourceConfig& config);
+std::string default_camera_pipeline();
 
 } // namespace catcheye::input
