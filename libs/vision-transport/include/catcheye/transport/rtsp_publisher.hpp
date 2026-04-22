@@ -52,6 +52,8 @@ class RtspPublisher final : public ResultPublisher {
     GMainLoop* loop_ = nullptr;
     std::thread server_thread_;
     std::atomic<bool> running_ {false};
+    std::atomic<bool> warned_missing_appsrc_ {false};
+    std::atomic<bool> warned_invalid_frame_ {false};
 };
 
 } // namespace catcheye::transport

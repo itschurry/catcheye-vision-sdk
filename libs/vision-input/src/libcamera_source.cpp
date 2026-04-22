@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <iostream>
 
 #include <sys/mman.h>
 
@@ -36,10 +37,12 @@ bool LibCameraSource::open()
 
     camera_manager_ = std::make_unique<libcamera::CameraManager>();
     if (camera_manager_->start() != 0) {
+        std::cerr << "libcamera: failed to start camera manager\n";
         return false;
     }
 
     if (camera_manager_->cameras().empty()) {
+        std::cerr << "libcamera: no cameras detected\n";
         camera_manager_->stop();
         return false;
     }
@@ -49,17 +52,20 @@ bool LibCameraSource::open()
         : camera_manager_->get(config_.camera_id);
 
     if (!camera_) {
+        std::cerr << "libcamera: failed to get camera '" << config_.camera_id << "'\n";
         camera_manager_->stop();
         return false;
     }
 
     if (camera_->acquire() != 0) {
+        std::cerr << "libcamera: failed to acquire camera '" << camera_->id() << "'\n";
         camera_manager_->stop();
         return false;
     }
 
     camera_config_ = camera_->generateConfiguration({libcamera::StreamRole::VideoRecording});
     if (!camera_config_) {
+        std::cerr << "libcamera: failed to generate configuration for '" << camera_->id() << "'\n";
         camera_->release();
         camera_manager_->stop();
         return false;
@@ -74,12 +80,15 @@ bool LibCameraSource::open()
     stream_cfg.bufferCount = 4;
 
     if (camera_config_->validate() == libcamera::CameraConfiguration::Invalid) {
+        std::cerr << "libcamera: invalid configuration for '" << camera_->id()
+                  << "' (" << config_.width << "x" << config_.height << ")\n";
         camera_->release();
         camera_manager_->stop();
         return false;
     }
 
     if (camera_->configure(camera_config_.get()) != 0) {
+        std::cerr << "libcamera: failed to configure camera '" << camera_->id() << "'\n";
         camera_->release();
         camera_manager_->stop();
         return false;
@@ -89,6 +98,7 @@ bool LibCameraSource::open()
 
     allocator_ = std::make_unique<libcamera::FrameBufferAllocator>(camera_);
     if (allocator_->allocate(stream_) < 0) {
+        std::cerr << "libcamera: failed to allocate frame buffers for '" << camera_->id() << "'\n";
         camera_->release();
         camera_manager_->stop();
         return false;
@@ -97,6 +107,7 @@ bool LibCameraSource::open()
     for (const auto& buffer : allocator_->buffers(stream_)) {
         auto request = camera_->createRequest();
         if (!request || request->addBuffer(stream_, buffer.get()) != 0) {
+            std::cerr << "libcamera: failed to create or bind request buffers for '" << camera_->id() << "'\n";
             camera_->release();
             camera_manager_->stop();
             return false;
@@ -107,6 +118,7 @@ bool LibCameraSource::open()
     camera_->requestCompleted.connect(this, &LibCameraSource::on_request_completed);
 
     if (camera_->start() != 0) {
+        std::cerr << "libcamera: failed to start camera '" << camera_->id() << "'\n";
         camera_->release();
         camera_manager_->stop();
         return false;
@@ -117,6 +129,8 @@ bool LibCameraSource::open()
     }
 
     opened_ = true;
+    std::cerr << "libcamera: opened '" << camera_->id() << "' at "
+              << config_.width << "x" << config_.height << '\n';
     return true;
 }
 
@@ -159,6 +173,8 @@ FrameReadStatus LibCameraSource::read(Frame& frame)
             plane.fd.get(), static_cast<off_t>(plane.offset));
 
         if (mapped == MAP_FAILED) {
+            std::cerr << "libcamera: mmap failed while reading frame from '"
+                      << (camera_ ? camera_->id() : config_.camera_id) << "'\n";
             request->reuse(libcamera::Request::ReuseBuffers);
             camera_->queueRequest(request);
             return FrameReadStatus::Error;
