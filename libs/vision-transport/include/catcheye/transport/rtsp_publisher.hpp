@@ -54,6 +54,8 @@ class RtspPublisher final : public ResultPublisher {
     std::atomic<bool> running_ {false};
     std::atomic<bool> warned_missing_appsrc_ {false};
     std::atomic<bool> warned_invalid_frame_ {false};
+    std::uint64_t pushed_frames_ = 0;
+    std::uint64_t dropped_frames_no_client_ = 0;
 };
 
 } // namespace catcheye::transport

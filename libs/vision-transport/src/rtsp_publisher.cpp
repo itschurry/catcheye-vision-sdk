@@ -148,6 +148,8 @@ bool RtspPublisher::start()
               << ":" << config_.port << config_.mount_point << '\n';
 
     loop_ = g_main_loop_new(nullptr, FALSE);
+    pushed_frames_ = 0;
+    dropped_frames_no_client_ = 0;
     running_ = true;
     server_thread_ = std::thread(&RtspPublisher::server_loop, this);
     return true;
@@ -200,6 +202,7 @@ void RtspPublisher::publish(
     {
         std::lock_guard<std::mutex> lock(appsrc_mutex_);
         if (!appsrc_) {
+            ++dropped_frames_no_client_;
             if (!warned_missing_appsrc_.exchange(true)) {
                 std::cerr << "RTSP publisher: appsrc not ready yet, dropping frames until a client connects\n";
             }
@@ -249,6 +252,17 @@ void RtspPublisher::publish(
         std::cerr << "RTSP publisher: gst_app_src_push_buffer failed with code "
                   << static_cast<int>(push_result)
                   << " at frame " << context.frame_index << '\n';
+    } else {
+        ++pushed_frames_;
+        if (pushed_frames_ == 1) {
+            std::cerr << "RTSP publisher: first frame pushed at runner frame "
+                      << context.frame_index << '\n';
+        } else if ((pushed_frames_ % 150U) == 0U) {
+            std::cerr << "RTSP publisher: pushed_frames=" << pushed_frames_
+                      << " last_runner_frame=" << context.frame_index
+                      << " dropped_before_client=" << dropped_frames_no_client_
+                      << '\n';
+        }
     }
     gst_object_unref(appsrc);
 }
