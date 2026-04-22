@@ -92,6 +92,28 @@ RtspPublisher::~RtspPublisher()
     stop();
 }
 
+bool RtspPublisher::configure_from_frame(const catcheye::input::Frame& frame)
+{
+    if (running_) {
+        return true;
+    }
+    if (frame.empty() || frame.width <= 0 || frame.height <= 0) {
+        return false;
+    }
+    if ((frame.width % 2) != 0 || (frame.height % 2) != 0) {
+        return false;
+    }
+
+    if (config_.width != frame.width || config_.height != frame.height) {
+        std::cerr << "RTSP publisher: configuring stream to match first frame "
+                  << frame.width << "x" << frame.height
+                  << " (was " << config_.width << "x" << config_.height << ")\n";
+        config_.width = frame.width;
+        config_.height = frame.height;
+    }
+    return true;
+}
+
 bool RtspPublisher::start()
 {
     if (running_) {

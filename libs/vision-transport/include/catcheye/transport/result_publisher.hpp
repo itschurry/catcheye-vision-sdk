@@ -15,6 +15,7 @@ class ResultPublisher {
    public:
     virtual ~ResultPublisher() = default;
 
+    virtual bool configure_from_frame(const catcheye::input::Frame& /*frame*/) { return true; }
     virtual bool start() = 0;
     virtual void stop() = 0;
     virtual void publish(

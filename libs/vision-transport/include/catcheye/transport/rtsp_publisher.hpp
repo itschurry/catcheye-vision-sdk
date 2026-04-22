@@ -30,6 +30,7 @@ class RtspPublisher final : public ResultPublisher {
     RtspPublisher(const RtspPublisher&) = delete;
     RtspPublisher& operator=(const RtspPublisher&) = delete;
 
+    bool configure_from_frame(const catcheye::input::Frame& frame) override;
     bool start() override;
     void stop() override;
     void publish(
