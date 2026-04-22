@@ -27,7 +27,11 @@ std::unique_ptr<FrameSource> create_frame_source(const InputSourceConfig& config
                         .pipeline = config.camera_pipeline,
                     });
             }
-            return std::make_unique<LibCameraSource>();
+            return std::make_unique<LibCameraSource>(
+                LibCameraConfig {
+                    .width = config.camera_width,
+                    .height = config.camera_height,
+                });
     }
 
     throw std::runtime_error("unsupported input source type");

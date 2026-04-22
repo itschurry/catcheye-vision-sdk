@@ -17,6 +17,8 @@ struct InputSourceConfig {
     InputSourceType type = InputSourceType::Camera;
     std::string uri;
     std::string camera_pipeline;
+    int camera_width = 1280;
+    int camera_height = 720;
 };
 
 enum class FrameReadStatus {
