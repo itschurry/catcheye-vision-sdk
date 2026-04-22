@@ -12,6 +12,7 @@ pkg_check_modules(GST_RTSP REQUIRED IMPORTED_TARGET gstreamer-rtsp-server-1.0)
 
 add_library(catcheye_vision_transport STATIC
     src/rtsp_publisher.cpp
+    src/websocket_publisher.cpp
 )
 add_library(catcheye::vision_transport ALIAS catcheye_vision_transport)
 set_target_properties(catcheye_vision_transport PROPERTIES EXPORT_NAME vision_transport)
