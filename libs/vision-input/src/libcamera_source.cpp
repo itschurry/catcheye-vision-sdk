@@ -164,10 +164,10 @@ FrameReadStatus LibCameraSource::read(Frame& frame)
             return FrameReadStatus::Error;
         }
 
-        const std::size_t copy_size = std::min(plane.length, total - offset);
+        const std::size_t copy_size = std::min(static_cast<std::size_t>(plane.length), total - offset);
         std::memcpy(frame.data.data() + offset, mapped, copy_size);
         ::munmap(mapped, plane.length);
-        offset += plane.length;
+        offset += copy_size;
     }
 
     request->reuse(libcamera::Request::ReuseBuffers);
