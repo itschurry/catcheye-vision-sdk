@@ -31,6 +31,7 @@ std::unique_ptr<FrameSource> create_frame_source(const InputSourceConfig& config
                 LibCameraConfig {
                     .width = config.camera_width,
                     .height = config.camera_height,
+                    .camera_id = {},
                 });
     }
 

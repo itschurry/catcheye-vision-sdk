@@ -72,7 +72,7 @@ bool LibCameraSource::open()
     }
 
     libcamera::StreamConfiguration& stream_cfg = camera_config_->at(0);
-    camera_config_->transform = libcamera::Transform::Rot180;
+    camera_config_->orientation = libcamera::Orientation::Rotate180;
     stream_cfg.size = {
         static_cast<unsigned int>(config_.width),
         static_cast<unsigned int>(config_.height),
@@ -132,7 +132,7 @@ bool LibCameraSource::open()
     opened_ = true;
     std::cerr << "libcamera: opened '" << camera_->id() << "' at "
               << config_.width << "x" << config_.height
-              << " with hardcoded 180-degree rotation\n";
+              << " with hardcoded 180-degree orientation\n";
     return true;
 }
 
