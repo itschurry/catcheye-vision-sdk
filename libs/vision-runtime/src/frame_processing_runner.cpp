@@ -46,6 +46,7 @@ int FrameProcessingRunner::run()
         static_cast<std::uint64_t>(std::max(config_.process_every_n_frames, 1));
 
     catcheye::input::Frame frame;
+    catcheye::protocol::FrameMessage latest_message;
     std::uint64_t frame_count = 0;
     int exit_code = 0;
 
@@ -72,9 +73,12 @@ int FrameProcessingRunner::run()
             .needs_publish = needs_publish,
         };
         ProcessOutput output = processor_->process(frame, context);
+        if (output.has_message) {
+            latest_message = std::move(output.message);
+        }
 
-        if (publisher_ && output.has_message) {
-            publisher_->publish(frame, output.message, {.frame_index = frame_count});
+        if (publisher_) {
+            publisher_->publish(frame, latest_message, {.frame_index = frame_count});
         }
     }
 
