@@ -25,8 +25,8 @@ elseif(MSVC)
 endif()
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(LIBCAMERA REQUIRED libcamera)
-pkg_check_modules(GSTREAMER REQUIRED gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0)
+pkg_check_modules(LIBCAMERA REQUIRED IMPORTED_TARGET libcamera)
+pkg_check_modules(GSTREAMER REQUIRED IMPORTED_TARGET gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0)
 
 add_library(catcheye_vision_input STATIC
     src/frame_source.cpp
@@ -46,8 +46,8 @@ target_include_directories(catcheye_vision_input
 
 target_link_libraries(catcheye_vision_input
     PUBLIC
-        ${LIBCAMERA_LIBRARIES}
-        ${GSTREAMER_LIBRARIES}
+        PkgConfig::LIBCAMERA
+        PkgConfig::GSTREAMER
 )
 
 target_compile_features(catcheye_vision_input PUBLIC cxx_std_20)

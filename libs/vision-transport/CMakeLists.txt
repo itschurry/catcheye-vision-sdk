@@ -7,8 +7,8 @@ project(catcheye-vision-transport
 )
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(GSTREAMER REQUIRED gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0)
-pkg_check_modules(GST_RTSP REQUIRED gstreamer-rtsp-server-1.0)
+pkg_check_modules(GSTREAMER REQUIRED IMPORTED_TARGET gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0)
+pkg_check_modules(GST_RTSP REQUIRED IMPORTED_TARGET gstreamer-rtsp-server-1.0)
 
 add_library(catcheye_vision_transport STATIC
     src/rtsp_publisher.cpp
@@ -28,8 +28,8 @@ target_link_libraries(catcheye_vision_transport
     PUBLIC
         catcheye::vision_protocol
         catcheye::vision_input
-        ${GSTREAMER_LIBRARIES}
-        ${GST_RTSP_LIBRARIES}
+        PkgConfig::GSTREAMER
+        PkgConfig::GST_RTSP
 )
 
 target_compile_features(catcheye_vision_transport PUBLIC cxx_std_20)
