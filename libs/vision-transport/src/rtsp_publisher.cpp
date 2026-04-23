@@ -10,8 +10,7 @@
 namespace catcheye::transport {
 namespace {
 
-void ensure_gst_init()
-{
+void ensure_gst_init() {
     static bool initialized = false;
     if (!initialized) {
         gst_init(nullptr, nullptr);
@@ -19,10 +18,7 @@ void ensure_gst_init()
     }
 }
 
-bool is_valid_nv12_frame(
-    const catcheye::input::Frame& frame,
-    const RtspPublisherConfig& config)
-{
+bool is_valid_nv12_frame(const catcheye::input::Frame& frame, const RtspPublisherConfig& config) {
     if (frame.width != config.width || frame.height != config.height) {
         return false;
     }
@@ -36,43 +32,21 @@ bool is_valid_nv12_frame(
         return false;
     }
 
-    const std::size_t expected_size =
-        catcheye::input::frame_data_size(frame.format, frame.stride, frame.height);
+    const std::size_t expected_size = catcheye::input::frame_data_size(frame.format, frame.stride, frame.height);
     return frame.data.size() == expected_size;
 }
 
-void log_invalid_frame_reason(
-    const catcheye::input::Frame& frame,
-    const RtspPublisherConfig& config)
-{
-    std::cerr << "RTSP publisher: dropping invalid frame"
-              << " width=" << frame.width
-              << " height=" << frame.height
-              << " stride=" << frame.stride
-              << " format=" << static_cast<int>(frame.format)
-              << " bytes=" << frame.data.size()
-              << " expected_width=" << config.width
-              << " expected_height=" << config.height
-              << " expected_framerate=" << config.framerate
+void log_invalid_frame_reason(const catcheye::input::Frame& frame, const RtspPublisherConfig& config) {
+    std::cerr << "RTSP publisher: dropping invalid frame" << " width=" << frame.width << " height=" << frame.height
+              << " stride=" << frame.stride << " format=" << static_cast<int>(frame.format) << " bytes=" << frame.data.size()
+              << " expected_width=" << config.width << " expected_height=" << config.height << " expected_framerate=" << config.framerate
               << '\n';
 }
 
-std::string select_h264_encoder_pipeline()
-{
-    if (gst_element_factory_find("v4l2h264enc") != nullptr) {
-        return "v4l2h264enc extra-controls=\"controls,repeat_sequence_header=1\""
-               " ! video/x-h264,level=(string)4";
-    }
-
+std::string select_h264_encoder_pipeline() {
     if (gst_element_factory_find("x264enc") != nullptr) {
         return "videoconvert"
                " ! x264enc tune=zerolatency speed-preset=ultrafast bitrate=2000 key-int-max=30"
-               " ! video/x-h264,profile=baseline";
-    }
-
-    if (gst_element_factory_find("openh264enc") != nullptr) {
-        return "videoconvert"
-               " ! openh264enc bitrate=2000000 rate-control=bitrate"
                " ! video/x-h264,profile=baseline";
     }
 
@@ -81,19 +55,15 @@ std::string select_h264_encoder_pipeline()
 
 } // namespace
 
-RtspPublisher::RtspPublisher(RtspPublisherConfig config)
-    : config_(std::move(config))
-{
+RtspPublisher::RtspPublisher(RtspPublisherConfig config) : config_(std::move(config)) {
     ensure_gst_init();
 }
 
-RtspPublisher::~RtspPublisher()
-{
+RtspPublisher::~RtspPublisher() {
     stop();
 }
 
-bool RtspPublisher::configure_from_frame(const catcheye::input::Frame& frame)
-{
+bool RtspPublisher::configure_from_frame(const catcheye::input::Frame& frame) {
     if (running_) {
         return true;
     }
@@ -105,17 +75,15 @@ bool RtspPublisher::configure_from_frame(const catcheye::input::Frame& frame)
     }
 
     if (config_.width != frame.width || config_.height != frame.height) {
-        std::cerr << "RTSP publisher: configuring stream to match first frame "
-                  << frame.width << "x" << frame.height
-                  << " (was " << config_.width << "x" << config_.height << ")\n";
+        std::cerr << "RTSP publisher: configuring stream to match first frame " << frame.width << "x" << frame.height << " (was "
+                  << config_.width << "x" << config_.height << ")\n";
         config_.width = frame.width;
         config_.height = frame.height;
     }
     return true;
 }
 
-bool RtspPublisher::start()
-{
+bool RtspPublisher::start() {
     if (running_) {
         return true;
     }
@@ -128,8 +96,7 @@ bool RtspPublisher::start()
 
     const std::string encoder_pipeline = select_h264_encoder_pipeline();
     if (encoder_pipeline.empty()) {
-        std::cerr << "RTSP publisher: no supported H.264 encoder plugin found "
-                     "(tried v4l2h264enc, x264enc, openh264enc)\n";
+        std::cerr << "RTSP publisher: required H.264 encoder plugin 'x264enc' not found\n";
         return false;
     }
 
@@ -139,22 +106,23 @@ bool RtspPublisher::start()
 
     std::cerr << "RTSP publisher: using encoder pipeline '" << encoder_pipeline << "'\n";
 
-    // Pipeline: appsrc (raw NV12) → H.264 encoder → RTP packetizer
-    const std::string pipeline =
-        "( appsrc name=src format=time is-live=true do-timestamp=true"
-        " caps=video/x-raw,format=NV12"
-        ",width=" + std::to_string(config_.width)
-        + ",height=" + std::to_string(config_.height)
-        + ",framerate=" + std::to_string(config_.framerate) + "/1"
-        + " ! " + encoder_pipeline
-        + " ! rtph264pay name=pay0 pt=96 )";
+    // Pipeline: appsrc (raw NV12) -> leaky queue -> H.264 encoder -> RTP packetizer.
+    // Keep only the newest frame so slow clients don't accumulate stale video.
+    const std::string pipeline = "( appsrc name=src format=time is-live=true do-timestamp=true"
+                                 " block=false max-buffers=1 leaky-type=downstream"
+                                 " caps=video/x-raw,format=NV12"
+                                 ",width=" +
+                                 std::to_string(config_.width) + ",height=" + std::to_string(config_.height) +
+                                 ",framerate=" + std::to_string(config_.framerate) + "/1" +
+                                 " ! queue leaky=downstream max-size-buffers=1 max-size-bytes=0 max-size-time=0" + " ! " +
+                                 encoder_pipeline + " ! rtph264pay name=pay0 pt=96 )";
 
     GstRTSPMediaFactory* factory = gst_rtsp_media_factory_new();
     gst_rtsp_media_factory_set_launch(factory, pipeline.c_str());
     gst_rtsp_media_factory_set_shared(factory, TRUE);
+    // gst_rtsp_media_factory_set_protocols(factory, GST_RTSP_LOWER_TRANS_UDP);
 
-    g_signal_connect(factory, "media-configure",
-                     G_CALLBACK(RtspPublisher::on_media_configure), this);
+    g_signal_connect(factory, "media-configure", G_CALLBACK(RtspPublisher::on_media_configure), this);
 
     GstRTSPMountPoints* mounts = gst_rtsp_server_get_mount_points(server_);
     gst_rtsp_mount_points_add_factory(mounts, config_.mount_point.c_str(), factory);
@@ -166,8 +134,7 @@ bool RtspPublisher::start()
         return false;
     }
 
-    std::cerr << "RTSP publisher: listening on rtsp://" << config_.bind_address
-              << ":" << config_.port << config_.mount_point << '\n';
+    std::cerr << "RTSP publisher: listening on rtsp://" << config_.bind_address << ":" << config_.port << config_.mount_point << '\n';
 
     loop_ = g_main_loop_new(nullptr, FALSE);
     pushed_frames_ = 0;
@@ -177,8 +144,7 @@ bool RtspPublisher::start()
     return true;
 }
 
-void RtspPublisher::stop()
-{
+void RtspPublisher::stop() {
     const bool was_running = running_.exchange(false);
 
     if (was_running && loop_) {
@@ -204,11 +170,8 @@ void RtspPublisher::stop()
     }
 }
 
-void RtspPublisher::publish(
-    const catcheye::input::Frame& frame,
-    const catcheye::protocol::FrameMessage& /*message*/,
-    const PublishContext& context)
-{
+void RtspPublisher::publish(const catcheye::input::Frame& frame, const catcheye::protocol::FrameMessage& /*message*/,
+                            const PublishContext& context) {
     if (!running_ || frame.empty()) {
         return;
     }
@@ -254,51 +217,34 @@ void RtspPublisher::publish(
         static_cast<gsize>(frame.stride) * static_cast<gsize>(frame.height),
     };
     const gint plane_strides[2] = {frame.stride, frame.stride};
-    gst_buffer_add_video_meta_full(
-        buffer,
-        GST_VIDEO_FRAME_FLAG_NONE,
-        GST_VIDEO_FORMAT_NV12,
-        static_cast<guint>(frame.width),
-        static_cast<guint>(frame.height),
-        2,
-        plane_offsets,
-        plane_strides);
+    gst_buffer_add_video_meta_full(buffer, GST_VIDEO_FRAME_FLAG_NONE, GST_VIDEO_FORMAT_NV12, static_cast<guint>(frame.width),
+                                   static_cast<guint>(frame.height), 2, plane_offsets, plane_strides);
 
-    const guint64 fr = static_cast<guint64>(config_.framerate);
-    GST_BUFFER_PTS(buffer) =
-        gst_util_uint64_scale(context.frame_index, GST_SECOND, fr);
-    GST_BUFFER_DURATION(buffer) = gst_util_uint64_scale(1, GST_SECOND, fr);
+    // Let appsrc timestamp buffers with the live pipeline clock. Deriving PTS from
+    // frame_index assumes the producer runs at exactly config_.framerate and can
+    // accumulate latency when the real capture rate differs.
 
     const GstFlowReturn push_result = gst_app_src_push_buffer(GST_APP_SRC(appsrc), buffer);
     if (push_result != GST_FLOW_OK) {
-        std::cerr << "RTSP publisher: gst_app_src_push_buffer failed with code "
-                  << static_cast<int>(push_result)
-                  << " at frame " << context.frame_index << '\n';
+        std::cerr << "RTSP publisher: gst_app_src_push_buffer failed with code " << static_cast<int>(push_result) << " at frame "
+                  << context.frame_index << '\n';
     } else {
         ++pushed_frames_;
         if (pushed_frames_ == 1) {
-            std::cerr << "RTSP publisher: first frame pushed at runner frame "
-                      << context.frame_index << '\n';
+            std::cerr << "RTSP publisher: first frame pushed at runner frame " << context.frame_index << '\n';
         } else if ((pushed_frames_ % 150U) == 0U) {
-            std::cerr << "RTSP publisher: pushed_frames=" << pushed_frames_
-                      << " last_runner_frame=" << context.frame_index
-                      << " dropped_before_client=" << dropped_frames_no_client_
-                      << '\n';
+            std::cerr << "RTSP publisher: pushed_frames=" << pushed_frames_ << " last_runner_frame=" << context.frame_index
+                      << " dropped_before_client=" << dropped_frames_no_client_ << '\n';
         }
     }
     gst_object_unref(appsrc);
 }
 
-void RtspPublisher::on_media_configure(
-    GstRTSPMediaFactory* /*factory*/,
-    GstRTSPMedia* media,
-    gpointer user_data)
-{
+void RtspPublisher::on_media_configure(GstRTSPMediaFactory* /*factory*/, GstRTSPMedia* media, gpointer user_data) {
     auto* self = static_cast<RtspPublisher*>(user_data);
     GstElement* element = gst_rtsp_media_get_element(media);
     GstElement* new_appsrc = gst_bin_get_by_name_recurse_up(GST_BIN(element), "src");
-    std::cerr << "RTSP publisher: media configured for client, appsrc="
-              << (new_appsrc != nullptr ? "ready" : "missing") << '\n';
+    std::cerr << "RTSP publisher: media configured for client, appsrc=" << (new_appsrc != nullptr ? "ready" : "missing") << '\n';
     {
         std::lock_guard<std::mutex> lock(self->appsrc_mutex_);
         if (self->appsrc_) {
@@ -310,8 +256,7 @@ void RtspPublisher::on_media_configure(
     gst_object_unref(element);
 }
 
-void RtspPublisher::server_loop()
-{
+void RtspPublisher::server_loop() {
     g_main_loop_run(loop_);
 }
 
