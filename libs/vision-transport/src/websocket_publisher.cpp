@@ -16,6 +16,8 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -46,6 +48,73 @@ const char* pixel_format_name(catcheye::input::PixelFormat format) {
     }
 
     return "UNKNOWN";
+}
+
+cv::Mat frame_to_bgr(const catcheye::input::Frame& frame) {
+    if (frame.empty() || frame.width <= 0 || frame.height <= 0 || frame.stride <= 0) {
+        return {};
+    }
+
+    const std::size_t expected_size =
+        catcheye::input::frame_data_size(frame.format, frame.stride, frame.height);
+    if (frame.data.size() < expected_size) {
+        return {};
+    }
+
+    auto* raw = const_cast<std::uint8_t*>(frame.data.data());
+    switch (frame.format) {
+    case catcheye::input::PixelFormat::BGR: {
+        cv::Mat wrapped(frame.height, frame.width, CV_8UC3, raw, static_cast<std::size_t>(frame.stride));
+        return wrapped.clone();
+    }
+    case catcheye::input::PixelFormat::RGB: {
+        cv::Mat wrapped(frame.height, frame.width, CV_8UC3, raw, static_cast<std::size_t>(frame.stride));
+        cv::Mat bgr;
+        cv::cvtColor(wrapped, bgr, cv::COLOR_RGB2BGR);
+        return bgr;
+    }
+    case catcheye::input::PixelFormat::RGBA: {
+        cv::Mat wrapped(frame.height, frame.width, CV_8UC4, raw, static_cast<std::size_t>(frame.stride));
+        cv::Mat bgr;
+        cv::cvtColor(wrapped, bgr, cv::COLOR_RGBA2BGR);
+        return bgr;
+    }
+    case catcheye::input::PixelFormat::BGRA: {
+        cv::Mat wrapped(frame.height, frame.width, CV_8UC4, raw, static_cast<std::size_t>(frame.stride));
+        cv::Mat bgr;
+        cv::cvtColor(wrapped, bgr, cv::COLOR_BGRA2BGR);
+        return bgr;
+    }
+    case catcheye::input::PixelFormat::GRAY8: {
+        cv::Mat wrapped(frame.height, frame.width, CV_8UC1, raw, static_cast<std::size_t>(frame.stride));
+        cv::Mat bgr;
+        cv::cvtColor(wrapped, bgr, cv::COLOR_GRAY2BGR);
+        return bgr;
+    }
+    case catcheye::input::PixelFormat::NV12: {
+        cv::Mat wrapped(frame.height + (frame.height / 2), frame.width, CV_8UC1, raw, static_cast<std::size_t>(frame.stride));
+        cv::Mat bgr;
+        cv::cvtColor(wrapped, bgr, cv::COLOR_YUV2BGR_NV12);
+        return bgr;
+    }
+    case catcheye::input::PixelFormat::UNKNOWN:
+        break;
+    }
+
+    return {};
+}
+
+bool encode_jpeg_payload(const catcheye::input::Frame& frame, std::vector<std::uint8_t>& jpeg_bytes) {
+    const cv::Mat bgr = frame_to_bgr(frame);
+    if (bgr.empty()) {
+        return false;
+    }
+
+    const std::vector<int> encode_params {
+        cv::IMWRITE_JPEG_QUALITY,
+        80,
+    };
+    return cv::imencode(".jpg", bgr, jpeg_bytes, encode_params);
 }
 
 bool send_all(int sock_fd, const void* data, std::size_t size) {
@@ -205,7 +274,8 @@ std::string find_header_value(std::string_view request, std::string_view header_
 std::string build_metadata_frame(
     const catcheye::input::Frame& frame,
     const catcheye::protocol::FrameMessage& message,
-    const PublishContext& context) {
+    const PublishContext& context,
+    std::size_t payload_size) {
     std::ostringstream oss;
     oss << "{"
         << "\"type\":\"frame\","
@@ -216,7 +286,8 @@ std::string build_metadata_frame(
         << "\"stride\":" << frame.stride << ','
         << "\"pixel_format\":\"" << pixel_format_name(frame.format) << "\","
         << "\"timestamp\":" << frame.timestamp << ','
-        << "\"payload_size\":" << frame.data.size() << ','
+        << "\"payload_encoding\":\"jpeg\","
+        << "\"payload_size\":" << payload_size << ','
         << "\"metadata\":" << message.metadata_json
         << "}";
     return oss.str();
@@ -327,10 +398,16 @@ void WebSocketPublisher::publish(
         return;
     }
 
-    const std::string metadata = build_metadata_frame(frame, message, context);
+    std::vector<std::uint8_t> jpeg_bytes;
+    if (!encode_jpeg_payload(frame, jpeg_bytes)) {
+        std::cerr << "WebSocket publisher: failed to encode JPEG payload at frame " << context.frame_index << '\n';
+        return;
+    }
+
+    const std::string metadata = build_metadata_frame(frame, message, context, jpeg_bytes.size());
     const auto metadata_frame =
         websocket_frame(std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(metadata.data()), metadata.size()), 0x1U);
-    const auto binary_frame = websocket_frame(frame.data, 0x2U);
+    const auto binary_frame = websocket_frame(jpeg_bytes, 0x2U);
 
     std::lock_guard<std::mutex> lock(clients_mutex_);
     auto it = client_fds_.begin();

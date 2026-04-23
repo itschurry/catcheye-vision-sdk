@@ -9,6 +9,7 @@ project(catcheye-vision-transport
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GSTREAMER REQUIRED IMPORTED_TARGET gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0)
 pkg_check_modules(GST_RTSP REQUIRED IMPORTED_TARGET gstreamer-rtsp-server-1.0)
+find_package(OpenCV REQUIRED)
 
 add_library(catcheye_vision_transport STATIC
     src/rtsp_publisher.cpp
@@ -23,6 +24,7 @@ target_include_directories(catcheye_vision_transport
         $<INSTALL_INTERFACE:include>
         ${GSTREAMER_INCLUDE_DIRS}
         ${GST_RTSP_INCLUDE_DIRS}
+        ${OpenCV_INCLUDE_DIRS}
 )
 
 target_link_libraries(catcheye_vision_transport
@@ -31,6 +33,7 @@ target_link_libraries(catcheye_vision_transport
         catcheye::vision_input
         PkgConfig::GSTREAMER
         PkgConfig::GST_RTSP
+        ${OpenCV_LIBS}
 )
 
 target_compile_features(catcheye_vision_transport PUBLIC cxx_std_20)
