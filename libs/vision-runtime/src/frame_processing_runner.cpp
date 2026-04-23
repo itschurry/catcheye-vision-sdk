@@ -62,20 +62,6 @@ int FrameProcessingRunner::run()
 
         ++frame_count;
 
-        if (publisher_ && !publisher_started) {
-            if (!publisher_->configure_from_frame(frame)) {
-                std::cerr << "failed to configure result publisher from first frame\n";
-                exit_code = 1;
-                break;
-            }
-            if (!publisher_->start()) {
-                std::cerr << "failed to start result publisher\n";
-                exit_code = 1;
-                break;
-            }
-            publisher_started = true;
-        }
-
         const ProcessContext context {
             .frame_index = frame_count,
             .should_process = ((frame_count - 1U) % process_interval) == 0U,
@@ -87,7 +73,21 @@ int FrameProcessingRunner::run()
         }
 
         if (publisher_) {
-            publisher_->publish(frame, latest_message, {.frame_index = frame_count});
+            const catcheye::input::Frame& publish_frame = output.has_publish_frame ? output.publish_frame : frame;
+            if (!publisher_started) {
+                if (!publisher_->configure_from_frame(publish_frame)) {
+                    std::cerr << "failed to configure result publisher from first output frame\n";
+                    exit_code = 1;
+                    break;
+                }
+                if (!publisher_->start()) {
+                    std::cerr << "failed to start result publisher\n";
+                    exit_code = 1;
+                    break;
+                }
+                publisher_started = true;
+            }
+            publisher_->publish(publish_frame, latest_message, {.frame_index = frame_count});
         }
     }
 

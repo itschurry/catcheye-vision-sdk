@@ -18,17 +18,14 @@ void ensure_gst_init() {
     }
 }
 
-bool is_valid_nv12_frame(const catcheye::input::Frame& frame, const RtspPublisherConfig& config) {
+bool is_valid_bgr_frame(const catcheye::input::Frame& frame, const RtspPublisherConfig& config) {
     if (frame.width != config.width || frame.height != config.height) {
         return false;
     }
-    if (frame.format != catcheye::input::PixelFormat::NV12) {
+    if (frame.format != catcheye::input::PixelFormat::BGR) {
         return false;
     }
-    if (frame.stride < frame.width || frame.stride <= 0) {
-        return false;
-    }
-    if ((frame.width % 2) != 0 || (frame.height % 2) != 0) {
+    if (frame.stride < (frame.width * 3) || frame.stride <= 0) {
         return false;
     }
 
@@ -106,11 +103,11 @@ bool RtspPublisher::start() {
 
     std::cerr << "RTSP publisher: using encoder pipeline '" << encoder_pipeline << "'\n";
 
-    // Pipeline: appsrc (raw NV12) -> leaky queue -> H.264 encoder -> RTP packetizer.
+    // Pipeline: appsrc (raw BGR) -> leaky queue -> H.264 encoder -> RTP packetizer.
     // Keep only the newest frame so slow clients don't accumulate stale video.
     const std::string pipeline = "( appsrc name=src format=time is-live=true do-timestamp=true"
                                  " block=false max-buffers=1 leaky-type=downstream"
-                                 " caps=video/x-raw,format=NV12"
+                                 " caps=video/x-raw,format=BGR"
                                  ",width=" +
                                  std::to_string(config_.width) + ",height=" + std::to_string(config_.height) +
                                  ",framerate=" + std::to_string(config_.framerate) + "/1" +
@@ -176,7 +173,7 @@ void RtspPublisher::publish(const catcheye::input::Frame& frame, const catcheye:
         return;
     }
 
-    if (!is_valid_nv12_frame(frame, config_)) {
+    if (!is_valid_bgr_frame(frame, config_)) {
         if (!warned_invalid_frame_.exchange(true)) {
             log_invalid_frame_reason(frame, config_);
         }
@@ -209,16 +206,6 @@ void RtspPublisher::publish(const catcheye::input::Frame& frame, const catcheye:
 
     std::memcpy(map.data, frame.data.data(), frame.data.size());
     gst_buffer_unmap(buffer, &map);
-
-    // Tell the encoder the actual memory layout when stride differs from width.
-    // Without this, GStreamer assumes stride == width and misinterprets padded rows.
-    const gsize plane_offsets[2] = {
-        0,
-        static_cast<gsize>(frame.stride) * static_cast<gsize>(frame.height),
-    };
-    const gint plane_strides[2] = {frame.stride, frame.stride};
-    gst_buffer_add_video_meta_full(buffer, GST_VIDEO_FRAME_FLAG_NONE, GST_VIDEO_FORMAT_NV12, static_cast<guint>(frame.width),
-                                   static_cast<guint>(frame.height), 2, plane_offsets, plane_strides);
 
     // Let appsrc timestamp buffers with the live pipeline clock. Deriving PTS from
     // frame_index assumes the producer runs at exactly config_.framerate and can

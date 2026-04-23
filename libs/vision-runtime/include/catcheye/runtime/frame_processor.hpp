@@ -16,6 +16,8 @@ struct ProcessContext {
 struct ProcessOutput {
     bool has_message = false;
     catcheye::protocol::FrameMessage message;
+    bool has_publish_frame = false;
+    catcheye::input::Frame publish_frame;
 };
 
 class FrameProcessor {
