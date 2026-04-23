@@ -4,8 +4,8 @@
 
 namespace catcheye::protocol {
 
-// Application-level result metadata attached to a processed frame.
-// Raw video data is carried separately by catcheye::input::Frame.
+// Application-level message contract shared between processors and publishers.
+// Raw frame bytes and transport-specific encoding are handled elsewhere.
 struct FrameMessage {
     std::string stream_name;
     std::string metadata_json = "{}";

@@ -11,7 +11,7 @@
 - `libs/vision-roi`
   - ROI 타입, 기하 계산, JSON 파싱, 검증, 포함 판정을 공통화한다
 - `libs/vision-protocol`
-  - 프레임 payload와 metadata를 공통 메시지 형식으로 정의한다
+  - 처리 결과 메타데이터용 공통 메시지 계약을 정의한다
 - `libs/vision-transport`
   - runtime과 WebSocket 같은 전송 구현체 사이 경계를 정의한다
 - `libs/vision-runtime`
