@@ -40,7 +40,7 @@ endif()
 set(CATCHEYE_VISION_DETECTION_SOURCES)
 
 if(CATCHEYE_VISION_DETECTION_ENABLE_NCNN)
-    find_package(OpenCV REQUIRED)
+    find_package(OpenCV REQUIRED COMPONENTS core imgproc dnn)
     find_package(ncnn REQUIRED)
     find_package(yaml-cpp REQUIRED)
 
@@ -52,7 +52,7 @@ endif()
 if(CATCHEYE_VISION_DETECTION_ENABLE_HAILO)
     find_package(HailoRT REQUIRED)
     if(NOT CATCHEYE_VISION_DETECTION_ENABLE_NCNN)
-        find_package(OpenCV REQUIRED)
+        find_package(OpenCV REQUIRED COMPONENTS core imgproc)
         find_package(yaml-cpp REQUIRED)
     endif()
 

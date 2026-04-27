@@ -1,6 +1,8 @@
 #include "catcheye/input/gstreamer_source.hpp"
 
 #include <chrono>
+#include <iostream>
+#include <string>
 
 #include <gst/video/video.h>
 
@@ -37,6 +39,53 @@ void ensure_gst_init()
     }
 }
 
+void log_gst_message(GstMessage* message, const std::string& context)
+{
+    GError* error = nullptr;
+    gchar* debug_info = nullptr;
+
+    switch (GST_MESSAGE_TYPE(message)) {
+        case GST_MESSAGE_ERROR:
+            gst_message_parse_error(message, &error, &debug_info);
+            std::cerr << "gstreamer error while " << context << ": "
+                      << (error ? error->message : "unknown error") << '\n';
+            break;
+        case GST_MESSAGE_WARNING:
+            gst_message_parse_warning(message, &error, &debug_info);
+            std::cerr << "gstreamer warning while " << context << ": "
+                      << (error ? error->message : "unknown warning") << '\n';
+            break;
+        default:
+            break;
+    }
+
+    if (debug_info) {
+        std::cerr << "gstreamer debug: " << debug_info << '\n';
+    }
+    if (error) {
+        g_error_free(error);
+    }
+    if (debug_info) {
+        g_free(debug_info);
+    }
+}
+
+void log_gst_bus_messages(GstElement* pipeline, const std::string& context)
+{
+    GstBus* bus = gst_element_get_bus(pipeline);
+    if (!bus) {
+        return;
+    }
+
+    while (GstMessage* message = gst_bus_pop_filtered(
+               bus, static_cast<GstMessageType>(GST_MESSAGE_ERROR | GST_MESSAGE_WARNING))) {
+        log_gst_message(message, context);
+        gst_message_unref(message);
+    }
+
+    gst_object_unref(bus);
+}
+
 } // namespace
 
 GStreamerSource::GStreamerSource(GStreamerSourceConfig config)
@@ -62,6 +111,8 @@ bool GStreamerSource::open()
     GError* error = nullptr;
     pipeline_ = gst_parse_launch(full_pipeline.c_str(), &error);
     if (error) {
+        std::cerr << "failed to parse gstreamer pipeline: " << error->message << '\n';
+        std::cerr << "pipeline: " << full_pipeline << '\n';
         g_error_free(error);
     }
     if (!pipeline_) {
@@ -79,6 +130,8 @@ bool GStreamerSource::open()
 
     const GstStateChangeReturn ret = gst_element_set_state(pipeline_, GST_STATE_PLAYING);
     if (ret == GST_STATE_CHANGE_FAILURE) {
+        log_gst_bus_messages(pipeline_, "starting pipeline");
+        std::cerr << "failed to start gstreamer pipeline: " << full_pipeline << '\n';
         gst_object_unref(appsink_);
         gst_object_unref(pipeline_);
         appsink_ = nullptr;
