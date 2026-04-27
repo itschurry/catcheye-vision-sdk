@@ -44,7 +44,7 @@ if(CATCHEYE_VISION_DETECTION_ENABLE_NCNN)
     find_package(yaml-cpp REQUIRED)
 
     list(APPEND CATCHEYE_VISION_DETECTION_SOURCES
-        src/ncnn_detector.cpp
+        src/ncnn/ncnn_detector.cpp
     )
 endif()
 

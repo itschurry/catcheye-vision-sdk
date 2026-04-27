@@ -1,4 +1,4 @@
-#include "catcheye/detection/ncnn_detector.hpp"
+#include "catcheye/detection/ncnn/ncnn_detector.hpp"
 
 #include <algorithm>
 #include <cmath>
