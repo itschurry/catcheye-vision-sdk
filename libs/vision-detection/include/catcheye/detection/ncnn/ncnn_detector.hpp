@@ -1,10 +1,9 @@
 #pragma once
 
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
-
-#include <net.h>
 
 #include "catcheye/detection/detector.hpp"
 
@@ -27,6 +26,12 @@ struct NcnnDetectorConfig {
 class NcnnDetector final : public IDetector {
 public:
     explicit NcnnDetector(NcnnDetectorConfig config = {});
+    ~NcnnDetector() override;
+
+    NcnnDetector(const NcnnDetector&) = delete;
+    NcnnDetector& operator=(const NcnnDetector&) = delete;
+    NcnnDetector(NcnnDetector&&) noexcept;
+    NcnnDetector& operator=(NcnnDetector&&) noexcept;
 
     bool initialize() override;
     bool is_initialized() const override;
@@ -34,9 +39,11 @@ public:
     std::string class_name(int class_id) const override;
 
 private:
+    struct Impl;
+
     NcnnDetectorConfig config_;
-    ncnn::Net net_;
     std::map<int, std::string> class_names_;
+    std::unique_ptr<Impl> impl_;
     bool initialized_ = false;
 };
 

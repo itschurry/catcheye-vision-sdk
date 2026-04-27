@@ -7,6 +7,7 @@ project(catcheye-vision-detection
 )
 
 option(CATCHEYE_VISION_DETECTION_ENABLE_NCNN "Build NCNN detector backend" ON)
+option(CATCHEYE_VISION_DETECTION_ENABLE_HAILO "Build HailoRT detector backend" OFF)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -48,6 +49,18 @@ if(CATCHEYE_VISION_DETECTION_ENABLE_NCNN)
     )
 endif()
 
+if(CATCHEYE_VISION_DETECTION_ENABLE_HAILO)
+    find_package(HailoRT REQUIRED)
+    if(NOT CATCHEYE_VISION_DETECTION_ENABLE_NCNN)
+        find_package(OpenCV REQUIRED)
+        find_package(yaml-cpp REQUIRED)
+    endif()
+
+    list(APPEND CATCHEYE_VISION_DETECTION_SOURCES
+        src/hailo/hailo_detector.cpp
+    )
+endif()
+
 add_library(catcheye_vision_detection STATIC
     ${CATCHEYE_VISION_DETECTION_SOURCES}
 )
@@ -84,5 +97,25 @@ if(CATCHEYE_VISION_DETECTION_ENABLE_NCNN)
     target_compile_definitions(catcheye_vision_detection
         PUBLIC
             CATCHEYE_VISION_DETECTION_HAS_NCNN=1
+    )
+endif()
+
+if(CATCHEYE_VISION_DETECTION_ENABLE_HAILO)
+    target_include_directories(catcheye_vision_detection
+        PRIVATE
+            ${OpenCV_INCLUDE_DIRS}
+    )
+
+    target_link_libraries(catcheye_vision_detection
+        PUBLIC
+            HailoRT::libhailort
+        PRIVATE
+            ${OpenCV_LIBS}
+            yaml-cpp::yaml-cpp
+    )
+
+    target_compile_definitions(catcheye_vision_detection
+        PUBLIC
+            CATCHEYE_VISION_DETECTION_HAS_HAILO=1
     )
 endif()

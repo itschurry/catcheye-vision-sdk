@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <memory>
 #include <utility>
 
 #include <opencv2/dnn/dnn.hpp>
@@ -12,6 +13,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include "catcheye/input/pixel_format.hpp"
+#include <net.h>
 
 namespace catcheye::detection {
 namespace {
@@ -260,10 +262,19 @@ std::vector<Detection> decode_yolo_output(
 
 } // namespace
 
+struct NcnnDetector::Impl {
+    ncnn::Net net;
+};
+
 NcnnDetector::NcnnDetector(NcnnDetectorConfig config)
-    : config_(std::move(config))
+    : config_(std::move(config)),
+      impl_(std::make_unique<Impl>())
 {
 }
+
+NcnnDetector::~NcnnDetector() = default;
+NcnnDetector::NcnnDetector(NcnnDetector&&) noexcept = default;
+NcnnDetector& NcnnDetector::operator=(NcnnDetector&&) noexcept = default;
 
 bool NcnnDetector::initialize()
 {
@@ -271,15 +282,15 @@ bool NcnnDetector::initialize()
         return true;
     }
 
-    net_.opt.use_vulkan_compute = config_.use_vulkan_compute;
-    net_.opt.num_threads = config_.num_threads;
+    impl_->net.opt.use_vulkan_compute = config_.use_vulkan_compute;
+    impl_->net.opt.num_threads = config_.num_threads;
 
-    if (net_.load_param(config_.param_path.c_str()) != 0) {
+    if (impl_->net.load_param(config_.param_path.c_str()) != 0) {
         std::cerr << "failed to load ncnn param '" << config_.param_path << "'\n";
         return false;
     }
 
-    if (net_.load_model(config_.bin_path.c_str()) != 0) {
+    if (impl_->net.load_model(config_.bin_path.c_str()) != 0) {
         std::cerr << "failed to load ncnn model '" << config_.bin_path << "'\n";
         return false;
     }
@@ -322,7 +333,7 @@ std::vector<Detection> NcnnDetector::detect(const catcheye::input::Frame& frame)
     const float norm[3] = {1.0F / 255.0F, 1.0F / 255.0F, 1.0F / 255.0F};
     input.substract_mean_normalize(nullptr, norm);
 
-    ncnn::Extractor extractor = net_.create_extractor();
+    ncnn::Extractor extractor = impl_->net.create_extractor();
     if (extractor.input(config_.input_blob_name.c_str(), input) != 0) {
         std::cerr << "failed to bind input blob '" << config_.input_blob_name << "'\n";
         return {};
