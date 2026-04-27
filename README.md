@@ -8,6 +8,8 @@
 
 - `libs/vision-input`
   - 이미지, 비디오, 카메라 입력을 `FrameSource`로 통일한다
+- `libs/vision-detection`
+  - detection 타입, detector 인터페이스, 추론 백엔드 구현을 공통화한다
 - `libs/vision-roi`
   - ROI 타입, 기하 계산, JSON 파싱, 검증, 포함 판정을 공통화한다
 - `libs/vision-protocol`
