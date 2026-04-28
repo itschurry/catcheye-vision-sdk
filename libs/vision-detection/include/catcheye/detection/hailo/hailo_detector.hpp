@@ -20,8 +20,6 @@ struct HailoDetectorConfig {
     std::string metadata_path;
     std::string input_name;
     std::string output_name;
-    int input_width = 640;
-    int input_height = 640;
     float confidence_threshold = 0.25F;
     float nms_threshold = 0.45F;
     int max_proposals_per_class = 100;

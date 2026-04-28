@@ -173,6 +173,25 @@ LetterboxResult letterbox(const cv::Mat& image, int target_width, int target_hei
     return result;
 }
 
+cv::Mat convert_to_hailo_input(const cv::Mat& bgr_image, std::uint32_t features)
+{
+    cv::Mat converted;
+    switch (features) {
+        case 1:
+            cv::cvtColor(bgr_image, converted, cv::COLOR_BGR2GRAY);
+            return converted;
+        case 3:
+            cv::cvtColor(bgr_image, converted, cv::COLOR_BGR2RGB);
+            return converted;
+        case 4:
+            cv::cvtColor(bgr_image, converted, cv::COLOR_BGR2RGBA);
+            return converted;
+        default:
+            std::cerr << "unsupported Hailo input feature count: " << features << '\n';
+            return {};
+    }
+}
+
 std::map<int, std::string> load_class_names(const std::string& yaml_path)
 {
     std::map<int, std::string> class_names;
@@ -283,7 +302,9 @@ std::vector<Detection> decode_nms_by_class(const std::uint8_t* data,
                                            const HailoDetectorConfig& config,
                                            const LetterboxResult& letterbox_result,
                                            int original_width,
-                                           int original_height)
+                                           int original_height,
+                                           int input_width,
+                                           int input_height)
 {
     std::vector<Detection> detections;
     const float* values = reinterpret_cast<const float*>(data);
@@ -324,8 +345,8 @@ std::vector<Detection> decode_nms_by_class(const std::uint8_t* data,
                 letterbox_result,
                 original_width,
                 original_height,
-                config.input_width,
-                config.input_height);
+                input_width,
+                input_height);
         }
     }
 
@@ -337,7 +358,9 @@ std::vector<Detection> decode_nms_by_score(const std::uint8_t* data,
                                            const HailoDetectorConfig& config,
                                            const LetterboxResult& letterbox_result,
                                            int original_width,
-                                           int original_height)
+                                           int original_height,
+                                           int input_width,
+                                           int input_height)
 {
     std::vector<Detection> detections;
     if (size < sizeof(hailo_detections_t)) {
@@ -363,8 +386,8 @@ std::vector<Detection> decode_nms_by_score(const std::uint8_t* data,
             letterbox_result,
             original_width,
             original_height,
-            config.input_width,
-            config.input_height);
+            input_width,
+            input_height);
     }
 
     return detections;
@@ -379,6 +402,7 @@ struct HailoDetector::Impl {
     std::string input_name;
     std::vector<std::string> output_names;
     std::map<std::string, OutputInfo> output_infos;
+    hailo_3d_image_shape_t input_shape{};
     std::size_t input_frame_size = 0;
 };
 
@@ -417,7 +441,18 @@ bool HailoDetector::initialize()
         auto input_stream = impl_->infer_model->input(impl_->input_name).expect("failed to get Hailo input stream");
         input_stream.set_format_type(HAILO_FORMAT_TYPE_UINT8);
         input_stream.set_format_order(HAILO_FORMAT_ORDER_NHWC);
+        impl_->input_shape = input_stream.shape();
         impl_->input_frame_size = input_stream.get_frame_size();
+        if (impl_->input_shape.width == 0 || impl_->input_shape.height == 0 || impl_->input_shape.features == 0) {
+            std::cerr << "Hailo input stream has invalid shape: height=" << impl_->input_shape.height
+                      << ", width=" << impl_->input_shape.width
+                      << ", features=" << impl_->input_shape.features << '\n';
+            return false;
+        }
+        std::cerr << "Hailo input stream: name='" << impl_->input_name
+                  << "', shape=" << impl_->input_shape.width << "x" << impl_->input_shape.height
+                  << "x" << impl_->input_shape.features
+                  << ", frame_size=" << impl_->input_frame_size << '\n';
 
         const auto& output_names = impl_->infer_model->get_output_names();
         if (output_names.empty()) {
@@ -493,18 +528,32 @@ std::vector<Detection> HailoDetector::detect(const catcheye::input::Frame& frame
         return {};
     }
 
-    const LetterboxResult preprocessed = letterbox(bgr, config_.input_width, config_.input_height);
+    const int input_width = static_cast<int>(impl_->input_shape.width);
+    const int input_height = static_cast<int>(impl_->input_shape.height);
+    const LetterboxResult preprocessed = letterbox(bgr, input_width, input_height);
 
-    cv::Mat rgb;
-    cv::cvtColor(preprocessed.image, rgb, cv::COLOR_BGR2RGB);
-    if (!rgb.isContinuous()) {
-        rgb = rgb.clone();
+    cv::Mat model_input = convert_to_hailo_input(preprocessed.image, impl_->input_shape.features);
+    if (model_input.empty()) {
+        return {};
+    }
+    if (!model_input.isContinuous()) {
+        model_input = model_input.clone();
     }
 
-    const std::size_t input_bytes = rgb.total() * rgb.elemSize();
-    if (input_bytes != impl_->input_frame_size) {
-        std::cerr << "Hailo input frame size mismatch: actual=" << input_bytes
-                  << ", expected=" << impl_->input_frame_size << '\n';
+    const std::size_t packed_input_bytes = model_input.total() * model_input.elemSize();
+    const auto input_height_size = static_cast<std::size_t>(input_height);
+    const std::size_t packed_row_bytes = static_cast<std::size_t>(model_input.cols) * model_input.elemSize();
+    const bool can_copy_with_row_padding =
+        input_height_size > 0 &&
+        (impl_->input_frame_size % input_height_size) == 0 &&
+        (impl_->input_frame_size / input_height_size) >= packed_row_bytes &&
+        model_input.rows == input_height;
+
+    if (packed_input_bytes != impl_->input_frame_size && !can_copy_with_row_padding) {
+        std::cerr << "Hailo input frame size mismatch: actual=" << packed_input_bytes
+                  << ", expected=" << impl_->input_frame_size
+                  << ", shape=" << impl_->input_shape.width << "x" << impl_->input_shape.height
+                  << "x" << impl_->input_shape.features << '\n';
         return {};
     }
 
@@ -512,7 +561,18 @@ std::vector<Detection> HailoDetector::detect(const catcheye::input::Frame& frame
         auto bindings = impl_->configured_model->create_bindings().expect("failed to create Hailo bindings");
 
         AlignedBuffer input_buffer = allocate_aligned_buffer(impl_->input_frame_size);
-        std::memcpy(input_buffer.data.get(), rgb.data, impl_->input_frame_size);
+        if (packed_input_bytes == impl_->input_frame_size) {
+            std::memcpy(input_buffer.data.get(), model_input.data, impl_->input_frame_size);
+        } else {
+            const std::size_t dst_row_bytes = impl_->input_frame_size / input_height_size;
+            std::memset(input_buffer.data.get(), 0, impl_->input_frame_size);
+            for (int row = 0; row < model_input.rows; ++row) {
+                std::memcpy(
+                    input_buffer.data.get() + (static_cast<std::size_t>(row) * dst_row_bytes),
+                    model_input.ptr(row),
+                    packed_row_bytes);
+            }
+        }
 
         auto input = bindings.input(impl_->input_name).expect("failed to bind Hailo input");
         hailo_status status = input.set_buffer(hailort::MemoryView(input_buffer.data.get(), input_buffer.size));
@@ -557,7 +617,9 @@ std::vector<Detection> HailoDetector::detect(const catcheye::input::Frame& frame
                     config_,
                     preprocessed,
                     frame.width,
-                    frame.height);
+                    frame.height,
+                    input_width,
+                    input_height);
             } else {
                 decoded = decode_nms_by_class(
                     output_buffer.data.get(),
@@ -566,7 +628,9 @@ std::vector<Detection> HailoDetector::detect(const catcheye::input::Frame& frame
                     config_,
                     preprocessed,
                     frame.width,
-                    frame.height);
+                    frame.height,
+                    input_width,
+                    input_height);
             }
 
             detections.insert(detections.end(), decoded.begin(), decoded.end());
