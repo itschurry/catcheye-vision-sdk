@@ -39,10 +39,17 @@ endif()
 
 set(CATCHEYE_VISION_DETECTION_SOURCES)
 
+function(catcheye_vision_detection_normalize_yaml_cpp_target)
+    if(TARGET yaml-cpp AND NOT TARGET yaml-cpp::yaml-cpp)
+        add_library(yaml-cpp::yaml-cpp ALIAS yaml-cpp)
+    endif()
+endfunction()
+
 if(CATCHEYE_VISION_DETECTION_ENABLE_NCNN)
     find_package(OpenCV REQUIRED COMPONENTS core imgproc dnn)
     find_package(ncnn REQUIRED)
     find_package(yaml-cpp REQUIRED)
+    catcheye_vision_detection_normalize_yaml_cpp_target()
 
     list(APPEND CATCHEYE_VISION_DETECTION_SOURCES
         src/ncnn/ncnn_detector.cpp
@@ -54,6 +61,7 @@ if(CATCHEYE_VISION_DETECTION_ENABLE_HAILO)
     if(NOT CATCHEYE_VISION_DETECTION_ENABLE_NCNN)
         find_package(OpenCV REQUIRED COMPONENTS core imgproc)
         find_package(yaml-cpp REQUIRED)
+        catcheye_vision_detection_normalize_yaml_cpp_target()
     endif()
 
     list(APPEND CATCHEYE_VISION_DETECTION_SOURCES
