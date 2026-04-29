@@ -15,7 +15,11 @@
 #include <yaml-cpp/yaml.h>
 
 #include "catcheye/input/pixel_format.hpp"
+#include "catcheye/detection/postprocess/postprocess.hpp"
+#include "catcheye/detection/postprocess/tensor_view.hpp"
+#include "catcheye/detection/postprocess/yolo_decoder.hpp"
 #include "hailo/hailort.hpp"
+#include "hailo_nms_decoder.hpp"
 
 #if defined(__unix__)
 #include <sys/mman.h>
@@ -35,6 +39,7 @@ struct LetterboxResult {
 struct OutputInfo {
     hailo_format_order_t order = HAILO_FORMAT_ORDER_AUTO;
     hailo_nms_shape_t nms_shape{};
+    hailo_3d_image_shape_t shape{};
     bool is_nms = false;
     std::size_t frame_size = 0;
 };
@@ -226,171 +231,15 @@ std::map<int, std::string> load_class_names(const std::string& yaml_path)
     return class_names;
 }
 
-BoundingBox map_hailo_box(float x_min, float y_min, float x_max, float y_max,
-                          const LetterboxResult& letterbox_result,
-                          int original_width, int original_height,
-                          int input_width, int input_height)
+PostprocessOptions make_postprocess_options(const HailoDetectorConfig& config)
 {
-    if (std::max({std::abs(x_min), std::abs(y_min), std::abs(x_max), std::abs(y_max)}) <= 1.5F) {
-        x_min *= static_cast<float>(input_width);
-        x_max *= static_cast<float>(input_width);
-        y_min *= static_cast<float>(input_height);
-        y_max *= static_cast<float>(input_height);
-    }
-
-    const float left = static_cast<float>(letterbox_result.pad_width / 2);
-    const float top = static_cast<float>(letterbox_result.pad_height / 2);
-
-    x_min = (x_min - left) / letterbox_result.scale;
-    x_max = (x_max - left) / letterbox_result.scale;
-    y_min = (y_min - top) / letterbox_result.scale;
-    y_max = (y_max - top) / letterbox_result.scale;
-
-    x_min = std::clamp(x_min, 0.0F, static_cast<float>(original_width - 1));
-    x_max = std::clamp(x_max, 0.0F, static_cast<float>(original_width - 1));
-    y_min = std::clamp(y_min, 0.0F, static_cast<float>(original_height - 1));
-    y_max = std::clamp(y_max, 0.0F, static_cast<float>(original_height - 1));
-
-    return BoundingBox {
-        .x = x_min,
-        .y = y_min,
-        .width = std::max(0.0F, x_max - x_min),
-        .height = std::max(0.0F, y_max - y_min),
+    return PostprocessOptions {
+        .confidence_threshold = config.confidence_threshold,
+        .nms_threshold = config.nms_threshold,
+        .class_aware_nms = true,
+        .apply_nms = true,
+        .allowed_class_ids = config.allowed_class_ids,
     };
-}
-
-void append_detection(std::vector<Detection>& detections,
-                      int class_id,
-                      float score,
-                      float x_min,
-                      float y_min,
-                      float x_max,
-                      float y_max,
-                      float confidence_threshold,
-                      const LetterboxResult& letterbox_result,
-                      int original_width,
-                      int original_height,
-                      int input_width,
-                      int input_height)
-{
-    if (score < confidence_threshold) {
-        return;
-    }
-
-    BoundingBox box = map_hailo_box(
-        x_min, y_min, x_max, y_max,
-        letterbox_result,
-        original_width,
-        original_height,
-        input_width,
-        input_height);
-
-    if (box.width <= 1.0F || box.height <= 1.0F) {
-        return;
-    }
-
-    detections.push_back(Detection {
-        .class_id = class_id,
-        .score = score,
-        .box = box,
-    });
-}
-
-std::vector<Detection> decode_nms_by_class(const std::uint8_t* data,
-                                           std::size_t size,
-                                           const hailo_nms_shape_t& shape,
-                                           const HailoDetectorConfig& config,
-                                           const LetterboxResult& letterbox_result,
-                                           int original_width,
-                                           int original_height,
-                                           int input_width,
-                                           int input_height)
-{
-    std::vector<Detection> detections;
-    const float* values = reinterpret_cast<const float*>(data);
-    const std::size_t float_count = size / sizeof(float);
-    std::size_t offset = 0;
-
-    for (std::uint32_t class_id = 0; class_id < shape.number_of_classes; ++class_id) {
-        if (offset >= float_count) {
-            break;
-        }
-
-        const auto bbox_count = static_cast<std::uint32_t>(std::max(0.0F, values[offset++]));
-        const std::uint32_t boxes_to_read = std::min(bbox_count, shape.max_bboxes_per_class);
-        for (std::uint32_t box_index = 0; box_index < shape.max_bboxes_per_class; ++box_index) {
-            if ((offset + 5U) > float_count) {
-                return detections;
-            }
-
-            const float y_min = values[offset++];
-            const float x_min = values[offset++];
-            const float y_max = values[offset++];
-            const float x_max = values[offset++];
-            const float score = values[offset++];
-
-            if (box_index >= boxes_to_read) {
-                continue;
-            }
-
-            append_detection(
-                detections,
-                static_cast<int>(class_id),
-                score,
-                x_min,
-                y_min,
-                x_max,
-                y_max,
-                config.confidence_threshold,
-                letterbox_result,
-                original_width,
-                original_height,
-                input_width,
-                input_height);
-        }
-    }
-
-    return detections;
-}
-
-std::vector<Detection> decode_nms_by_score(const std::uint8_t* data,
-                                           std::size_t size,
-                                           const HailoDetectorConfig& config,
-                                           const LetterboxResult& letterbox_result,
-                                           int original_width,
-                                           int original_height,
-                                           int input_width,
-                                           int input_height)
-{
-    std::vector<Detection> detections;
-    if (size < sizeof(hailo_detections_t)) {
-        return detections;
-    }
-
-    const auto* hailo_detections = reinterpret_cast<const hailo_detections_t*>(data);
-    const std::size_t max_count = (size - sizeof(hailo_detections_t)) / sizeof(hailo_detection_t);
-    const std::size_t count = std::min<std::size_t>(hailo_detections->count, max_count);
-
-    detections.reserve(count);
-    for (std::size_t i = 0; i < count; ++i) {
-        const hailo_detection_t& item = hailo_detections->detections[i];
-        append_detection(
-            detections,
-            static_cast<int>(item.class_id),
-            item.score,
-            item.x_min,
-            item.y_min,
-            item.x_max,
-            item.y_max,
-            config.confidence_threshold,
-            letterbox_result,
-            original_width,
-            original_height,
-            input_width,
-            input_height);
-    }
-
-    return detections;
 }
 
 } // namespace
@@ -471,29 +320,43 @@ bool HailoDetector::initialize()
             info.is_nms = output_stream.is_nms();
 
             if (info.is_nms) {
-                output_stream.set_nms_score_threshold(config_.confidence_threshold);
-                output_stream.set_nms_iou_threshold(config_.nms_threshold);
-                output_stream.set_nms_max_proposals_per_class(static_cast<std::uint32_t>(config_.max_proposals_per_class));
-                output_stream.set_nms_max_proposals_total(static_cast<std::uint32_t>(config_.max_proposals_total));
-
                 const HailoOutputDecoder decoder =
                     config_.output_decoder == HailoOutputDecoder::Auto ? HailoOutputDecoder::NmsByClass : config_.output_decoder;
                 if (decoder == HailoOutputDecoder::NmsByScore) {
                     output_stream.set_format_order(HAILO_FORMAT_ORDER_HAILO_NMS_BY_SCORE);
                     output_stream.set_format_type(HAILO_FORMAT_TYPE_UINT8);
+                    output_stream.set_nms_max_proposals_total(static_cast<std::uint32_t>(config_.max_proposals_total));
                 } else {
                     output_stream.set_format_order(HAILO_FORMAT_ORDER_HAILO_NMS_BY_CLASS);
                     output_stream.set_format_type(HAILO_FORMAT_TYPE_FLOAT32);
+                    output_stream.set_nms_max_proposals_per_class(static_cast<std::uint32_t>(config_.max_proposals_per_class));
                 }
 
+                output_stream.set_nms_score_threshold(config_.confidence_threshold);
+                output_stream.set_nms_iou_threshold(config_.nms_threshold);
                 info.nms_shape = output_stream.get_nms_shape().expect("failed to get Hailo NMS shape");
             } else {
                 output_stream.set_format_type(HAILO_FORMAT_TYPE_FLOAT32);
+                info.shape = output_stream.shape();
             }
 
             info.order = output_stream.format().order;
             info.frame_size = output_stream.get_frame_size();
             impl_->output_infos[output_name] = info;
+
+            if (info.is_nms) {
+                std::cerr << "Hailo output stream: name='" << output_name
+                          << "', nms=true"
+                          << ", order=" << static_cast<int>(info.order)
+                          << ", frame_size=" << info.frame_size << '\n';
+            } else {
+                std::cerr << "Hailo output stream: name='" << output_name
+                          << "', nms=false"
+                          << ", shape=" << info.shape.width << "x" << info.shape.height
+                          << "x" << info.shape.features
+                          << ", order=" << static_cast<int>(info.order)
+                          << ", frame_size=" << info.frame_size << '\n';
+            }
         }
 
         auto configured = impl_->infer_model->configure().expect("failed to configure Hailo infer model");
@@ -602,38 +465,53 @@ std::vector<Detection> HailoDetector::detect(const catcheye::input::Frame& frame
         }
 
         std::vector<Detection> detections;
+        std::vector<TensorView> raw_outputs;
+        const ModelDecodeContext decode_context {
+            .input_width = input_width,
+            .input_height = input_height,
+            .original_width = frame.width,
+            .original_height = frame.height,
+            .letterbox_scale = preprocessed.scale,
+            .pad_width = preprocessed.pad_width,
+            .pad_height = preprocessed.pad_height,
+        };
+        const PostprocessOptions postprocess_options = make_postprocess_options(config_);
+
         for (const auto& [output_name, output_buffer] : output_buffers) {
             const OutputInfo& info = impl_->output_infos.at(output_name);
+            const TensorView output_tensor {
+                .name = output_name,
+                .data = output_buffer.data.get(),
+                .byte_size = output_buffer.size,
+                .shape = {
+                    static_cast<int>(info.shape.height),
+                    static_cast<int>(info.shape.width),
+                    static_cast<int>(info.shape.features),
+                },
+                .data_type = TensorDataType::Float32,
+            };
+
             if (!info.is_nms) {
-                std::cerr << "Hailo output '" << output_name << "' is not NMS; raw output decoding is not configured\n";
+                raw_outputs.push_back(output_tensor);
                 continue;
             }
 
-            std::vector<Detection> decoded;
-            if (info.order == HAILO_FORMAT_ORDER_HAILO_NMS_BY_SCORE) {
-                decoded = decode_nms_by_score(
-                    output_buffer.data.get(),
-                    output_buffer.size,
-                    config_,
-                    preprocessed,
-                    frame.width,
-                    frame.height,
-                    input_width,
-                    input_height);
-            } else {
-                decoded = decode_nms_by_class(
-                    output_buffer.data.get(),
-                    output_buffer.size,
-                    info.nms_shape,
-                    config_,
-                    preprocessed,
-                    frame.width,
-                    frame.height,
-                    input_width,
-                    input_height);
-            }
+            const DecodeResult decoded = HailoNmsDecoder().decode(
+                output_tensor,
+                info.order,
+                info.nms_shape,
+                decode_context);
+            std::vector<Detection> finalized = finalize_detections(decoded, postprocess_options);
+            detections.insert(detections.end(), finalized.begin(), finalized.end());
+        }
 
-            detections.insert(detections.end(), decoded.begin(), decoded.end());
+        if (!raw_outputs.empty()) {
+            const DecodeResult decoded =
+                YoloDecoder(YoloDecoderOptions {.num_classes = static_cast<int>(class_names_.size()), .requires_nms = true}).decode(
+                    raw_outputs,
+                    decode_context);
+            std::vector<Detection> raw_detections = finalize_detections(decoded, postprocess_options);
+            detections.insert(detections.end(), raw_detections.begin(), raw_detections.end());
         }
 
         return detections;

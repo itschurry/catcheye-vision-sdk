@@ -8,11 +8,13 @@
 #include <memory>
 #include <utility>
 
-#include <opencv2/dnn/dnn.hpp>
 #include <opencv2/imgproc.hpp>
 #include <yaml-cpp/yaml.h>
 
 #include "catcheye/input/pixel_format.hpp"
+#include "catcheye/detection/postprocess/postprocess.hpp"
+#include "catcheye/detection/postprocess/tensor_view.hpp"
+#include "catcheye/detection/postprocess/yolo_decoder.hpp"
 #include <net.h>
 
 namespace catcheye::detection {
@@ -156,108 +158,41 @@ LetterboxResult letterbox(const cv::Mat& image, int target_width, int target_hei
     return result;
 }
 
-std::vector<Detection> decode_yolo_output(
+DecodeResult decode_yolo_output(
     const ncnn::Mat& output,
-    float confidence_threshold,
-    float nms_threshold,
     float scale,
     int pad_width,
     int pad_height,
     int original_width,
-    int original_height)
+    int original_height,
+    int input_width,
+    int input_height,
+    int num_classes)
 {
-    std::vector<Detection> detections;
-
     if (output.dims != 2) {
         std::cerr << "unexpected output dims: " << output.dims << '\n';
-        return detections;
+        return DecodeResult {};
     }
 
-    const int candidate_count = output.w;
-    const int attribute_count = output.h;
-    if (attribute_count < 6) {
-        std::cerr << "unexpected output attribute count: " << attribute_count << '\n';
-        return detections;
-    }
+    const TensorView tensor {
+        .name = "ncnn_output",
+        .data = output.row(0),
+        .byte_size = static_cast<std::size_t>(output.w) * static_cast<std::size_t>(output.h) * sizeof(float),
+        .shape = {output.h, output.w},
+        .data_type = TensorDataType::Float32,
+    };
 
-    const int left = pad_width / 2;
-    const int top = pad_height / 2;
+    const ModelDecodeContext context {
+        .input_width = input_width,
+        .input_height = input_height,
+        .original_width = original_width,
+        .original_height = original_height,
+        .letterbox_scale = scale,
+        .pad_width = pad_width,
+        .pad_height = pad_height,
+    };
 
-    const float* row_center_x = output.row(0);
-    const float* row_center_y = output.row(1);
-    const float* row_width = output.row(2);
-    const float* row_height = output.row(3);
-
-    std::vector<int> class_ids;
-    std::vector<float> scores;
-    std::vector<cv::Rect> boxes;
-
-    for (int index = 0; index < candidate_count; ++index) {
-        const float center_x = row_center_x[index];
-        const float center_y = row_center_y[index];
-        const float width = row_width[index];
-        const float height = row_height[index];
-
-        int best_class_id = -1;
-        float best_score = 0.0F;
-        for (int class_offset = 4; class_offset < attribute_count; ++class_offset) {
-            const float* class_row = output.row(class_offset);
-            const float score = class_row[index];
-            if (score > best_score) {
-                best_score = score;
-                best_class_id = class_offset - 4;
-            }
-        }
-
-        if (best_score < confidence_threshold) {
-            continue;
-        }
-
-        float x1 = center_x - (width * 0.5F);
-        float y1 = center_y - (height * 0.5F);
-        float x2 = center_x + (width * 0.5F);
-        float y2 = center_y + (height * 0.5F);
-
-        x1 = (x1 - static_cast<float>(left)) / scale;
-        y1 = (y1 - static_cast<float>(top)) / scale;
-        x2 = (x2 - static_cast<float>(left)) / scale;
-        y2 = (y2 - static_cast<float>(top)) / scale;
-
-        x1 = std::clamp(x1, 0.0F, static_cast<float>(original_width - 1));
-        y1 = std::clamp(y1, 0.0F, static_cast<float>(original_height - 1));
-        x2 = std::clamp(x2, 0.0F, static_cast<float>(original_width - 1));
-        y2 = std::clamp(y2, 0.0F, static_cast<float>(original_height - 1));
-
-        const int box_width = std::max(0, static_cast<int>(x2 - x1));
-        const int box_height = std::max(0, static_cast<int>(y2 - y1));
-        if (box_width <= 1 || box_height <= 1) {
-            continue;
-        }
-
-        class_ids.push_back(best_class_id);
-        scores.push_back(best_score);
-        boxes.emplace_back(static_cast<int>(x1), static_cast<int>(y1), box_width, box_height);
-    }
-
-    std::vector<int> selected_indices;
-    cv::dnn::NMSBoxes(boxes, scores, confidence_threshold, nms_threshold, selected_indices);
-
-    detections.reserve(selected_indices.size());
-    for (const int idx : selected_indices) {
-        const cv::Rect& box = boxes[static_cast<std::size_t>(idx)];
-        detections.push_back(Detection {
-            .class_id = class_ids[static_cast<std::size_t>(idx)],
-            .score = scores[static_cast<std::size_t>(idx)],
-            .box = BoundingBox {
-                .x = static_cast<float>(box.x),
-                .y = static_cast<float>(box.y),
-                .width = static_cast<float>(box.width),
-                .height = static_cast<float>(box.height),
-            },
-        });
-    }
-
-    return detections;
+    return YoloDecoder(YoloDecoderOptions {.num_classes = num_classes}).decode({tensor}, context);
 }
 
 } // namespace
@@ -345,15 +280,26 @@ std::vector<Detection> NcnnDetector::detect(const catcheye::input::Frame& frame)
         return {};
     }
 
-    return decode_yolo_output(
+    const DecodeResult decoded = decode_yolo_output(
         output,
-        config_.confidence_threshold,
-        config_.nms_threshold,
         preprocessed.scale,
         preprocessed.pad_width,
         preprocessed.pad_height,
         frame.width,
-        frame.height);
+        frame.height,
+        config_.input_width,
+        config_.input_height,
+        static_cast<int>(class_names_.size()));
+
+    return finalize_detections(
+        decoded,
+        PostprocessOptions {
+            .confidence_threshold = config_.confidence_threshold,
+            .nms_threshold = config_.nms_threshold,
+            .class_aware_nms = true,
+            .apply_nms = true,
+            .allowed_class_ids = config_.allowed_class_ids,
+        });
 }
 
 std::string NcnnDetector::class_name(int class_id) const

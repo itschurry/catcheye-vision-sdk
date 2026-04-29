@@ -2,6 +2,7 @@
 
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,7 @@ struct HailoDetectorConfig {
     std::string output_name;
     float confidence_threshold = 0.25F;
     float nms_threshold = 0.45F;
+    std::set<int> allowed_class_ids;
     int max_proposals_per_class = 100;
     int max_proposals_total = 100;
     int inference_timeout_ms = 1000;

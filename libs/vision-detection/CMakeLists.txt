@@ -39,6 +39,13 @@ endif()
 
 set(CATCHEYE_VISION_DETECTION_SOURCES)
 
+if(CATCHEYE_VISION_DETECTION_ENABLE_NCNN OR CATCHEYE_VISION_DETECTION_ENABLE_HAILO)
+    list(APPEND CATCHEYE_VISION_DETECTION_SOURCES
+        src/postprocess/postprocess.cpp
+        src/postprocess/yolo_decoder.cpp
+    )
+endif()
+
 function(catcheye_vision_detection_normalize_yaml_cpp_target)
     if(TARGET yaml-cpp AND NOT TARGET yaml-cpp::yaml-cpp)
         add_library(yaml-cpp::yaml-cpp ALIAS yaml-cpp)
@@ -59,13 +66,14 @@ endif()
 if(CATCHEYE_VISION_DETECTION_ENABLE_HAILO)
     find_package(HailoRT REQUIRED)
     if(NOT CATCHEYE_VISION_DETECTION_ENABLE_NCNN)
-        find_package(OpenCV REQUIRED COMPONENTS core imgproc)
+        find_package(OpenCV REQUIRED COMPONENTS core imgproc dnn)
         find_package(yaml-cpp REQUIRED)
         catcheye_vision_detection_normalize_yaml_cpp_target()
     endif()
 
     list(APPEND CATCHEYE_VISION_DETECTION_SOURCES
         src/hailo/hailo_detector.cpp
+        src/hailo/hailo_nms_decoder.cpp
     )
 endif()
 

@@ -2,6 +2,7 @@
 
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -19,6 +20,7 @@ struct NcnnDetectorConfig {
     int input_height             = 640;
     float confidence_threshold   = 0.25F;
     float nms_threshold          = 0.45F;
+    std::set<int> allowed_class_ids;
     int num_threads              = 2;
     bool use_vulkan_compute      = false;
 };
