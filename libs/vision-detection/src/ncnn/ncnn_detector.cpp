@@ -27,7 +27,7 @@ struct LetterboxResult {
     int pad_height = 0;
 };
 
-cv::Mat frame_to_bgr(const catcheye::input::Frame& frame)
+cv::Mat frame_to_rgb(const catcheye::input::Frame& frame)
 {
     if (frame.empty() || frame.width <= 0 || frame.height <= 0 || frame.stride <= 0) {
         return {};
@@ -46,38 +46,38 @@ cv::Mat frame_to_bgr(const catcheye::input::Frame& frame)
     switch (frame.format) {
         case catcheye::input::PixelFormat::BGR: {
             cv::Mat wrapped(frame.height, frame.width, CV_8UC3, const_cast<std::uint8_t*>(raw), static_cast<std::size_t>(frame.stride));
-            return wrapped.clone();
+            cv::Mat rgb;
+            cv::cvtColor(wrapped, rgb, cv::COLOR_BGR2RGB);
+            return rgb;
         }
         case catcheye::input::PixelFormat::RGB: {
             cv::Mat wrapped(frame.height, frame.width, CV_8UC3, const_cast<std::uint8_t*>(raw), static_cast<std::size_t>(frame.stride));
-            cv::Mat bgr;
-            cv::cvtColor(wrapped, bgr, cv::COLOR_RGB2BGR);
-            return bgr;
+            return wrapped.clone();
         }
         case catcheye::input::PixelFormat::RGBA: {
             cv::Mat wrapped(frame.height, frame.width, CV_8UC4, const_cast<std::uint8_t*>(raw), static_cast<std::size_t>(frame.stride));
-            cv::Mat bgr;
-            cv::cvtColor(wrapped, bgr, cv::COLOR_RGBA2BGR);
-            return bgr;
+            cv::Mat rgb;
+            cv::cvtColor(wrapped, rgb, cv::COLOR_RGBA2RGB);
+            return rgb;
         }
         case catcheye::input::PixelFormat::BGRA: {
             cv::Mat wrapped(frame.height, frame.width, CV_8UC4, const_cast<std::uint8_t*>(raw), static_cast<std::size_t>(frame.stride));
-            cv::Mat bgr;
-            cv::cvtColor(wrapped, bgr, cv::COLOR_BGRA2BGR);
-            return bgr;
+            cv::Mat rgb;
+            cv::cvtColor(wrapped, rgb, cv::COLOR_BGRA2RGB);
+            return rgb;
         }
         case catcheye::input::PixelFormat::GRAY8: {
             cv::Mat wrapped(frame.height, frame.width, CV_8UC1, const_cast<std::uint8_t*>(raw), static_cast<std::size_t>(frame.stride));
-            cv::Mat bgr;
-            cv::cvtColor(wrapped, bgr, cv::COLOR_GRAY2BGR);
-            return bgr;
+            cv::Mat rgb;
+            cv::cvtColor(wrapped, rgb, cv::COLOR_GRAY2RGB);
+            return rgb;
         }
         case catcheye::input::PixelFormat::NV12: {
             cv::Mat wrapped(frame.height + (frame.height / 2), frame.width, CV_8UC1, const_cast<std::uint8_t*>(raw),
                             static_cast<std::size_t>(frame.stride));
-            cv::Mat bgr;
-            cv::cvtColor(wrapped, bgr, cv::COLOR_YUV2BGR_NV12);
-            return bgr;
+            cv::Mat rgb;
+            cv::cvtColor(wrapped, rgb, cv::COLOR_YUV2RGB_NV12);
+            return rgb;
         }
         case catcheye::input::PixelFormat::UNKNOWN:
         default:
@@ -246,24 +246,21 @@ std::vector<Detection> NcnnDetector::detect(const catcheye::input::Frame& frame)
         return {};
     }
 
-    const cv::Mat bgr = frame_to_bgr(frame);
-    if (bgr.empty()) {
+    const cv::Mat rgb = frame_to_rgb(frame);
+    if (rgb.empty()) {
         return {};
     }
 
     const LetterboxResult preprocessed = letterbox(
-        bgr,
+        rgb,
         config_.input_width,
         config_.input_height);
 
-    cv::Mat rgb;
-    cv::cvtColor(preprocessed.image, rgb, cv::COLOR_BGR2RGB);
-
     ncnn::Mat input = ncnn::Mat::from_pixels(
-        rgb.data,
+        preprocessed.image.data,
         ncnn::Mat::PIXEL_RGB,
-        rgb.cols,
-        rgb.rows);
+        preprocessed.image.cols,
+        preprocessed.image.rows);
 
     const float norm[3] = {1.0F / 255.0F, 1.0F / 255.0F, 1.0F / 255.0F};
     input.substract_mean_normalize(nullptr, norm);

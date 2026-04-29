@@ -92,7 +92,7 @@ AlignedBuffer allocate_aligned_buffer(std::size_t size)
 #endif
 }
 
-cv::Mat frame_to_bgr(const catcheye::input::Frame& frame)
+cv::Mat frame_to_rgb(const catcheye::input::Frame& frame)
 {
     if (frame.empty() || frame.width <= 0 || frame.height <= 0 || frame.stride <= 0) {
         return {};
@@ -110,37 +110,37 @@ cv::Mat frame_to_bgr(const catcheye::input::Frame& frame)
     switch (frame.format) {
         case catcheye::input::PixelFormat::BGR: {
             cv::Mat wrapped(frame.height, frame.width, CV_8UC3, raw, static_cast<std::size_t>(frame.stride));
-            return wrapped.clone();
+            cv::Mat rgb;
+            cv::cvtColor(wrapped, rgb, cv::COLOR_BGR2RGB);
+            return rgb;
         }
         case catcheye::input::PixelFormat::RGB: {
             cv::Mat wrapped(frame.height, frame.width, CV_8UC3, raw, static_cast<std::size_t>(frame.stride));
-            cv::Mat bgr;
-            cv::cvtColor(wrapped, bgr, cv::COLOR_RGB2BGR);
-            return bgr;
+            return wrapped.clone();
         }
         case catcheye::input::PixelFormat::RGBA: {
             cv::Mat wrapped(frame.height, frame.width, CV_8UC4, raw, static_cast<std::size_t>(frame.stride));
-            cv::Mat bgr;
-            cv::cvtColor(wrapped, bgr, cv::COLOR_RGBA2BGR);
-            return bgr;
+            cv::Mat rgb;
+            cv::cvtColor(wrapped, rgb, cv::COLOR_RGBA2RGB);
+            return rgb;
         }
         case catcheye::input::PixelFormat::BGRA: {
             cv::Mat wrapped(frame.height, frame.width, CV_8UC4, raw, static_cast<std::size_t>(frame.stride));
-            cv::Mat bgr;
-            cv::cvtColor(wrapped, bgr, cv::COLOR_BGRA2BGR);
-            return bgr;
+            cv::Mat rgb;
+            cv::cvtColor(wrapped, rgb, cv::COLOR_BGRA2RGB);
+            return rgb;
         }
         case catcheye::input::PixelFormat::GRAY8: {
             cv::Mat wrapped(frame.height, frame.width, CV_8UC1, raw, static_cast<std::size_t>(frame.stride));
-            cv::Mat bgr;
-            cv::cvtColor(wrapped, bgr, cv::COLOR_GRAY2BGR);
-            return bgr;
+            cv::Mat rgb;
+            cv::cvtColor(wrapped, rgb, cv::COLOR_GRAY2RGB);
+            return rgb;
         }
         case catcheye::input::PixelFormat::NV12: {
             cv::Mat wrapped(frame.height + (frame.height / 2), frame.width, CV_8UC1, raw, static_cast<std::size_t>(frame.stride));
-            cv::Mat bgr;
-            cv::cvtColor(wrapped, bgr, cv::COLOR_YUV2BGR_NV12);
-            return bgr;
+            cv::Mat rgb;
+            cv::cvtColor(wrapped, rgb, cv::COLOR_YUV2RGB_NV12);
+            return rgb;
         }
         case catcheye::input::PixelFormat::UNKNOWN:
         default:
@@ -178,18 +178,17 @@ LetterboxResult letterbox(const cv::Mat& image, int target_width, int target_hei
     return result;
 }
 
-cv::Mat convert_to_hailo_input(const cv::Mat& bgr_image, std::uint32_t features)
+cv::Mat convert_to_hailo_input(const cv::Mat& rgb_image, std::uint32_t features)
 {
     cv::Mat converted;
     switch (features) {
         case 1:
-            cv::cvtColor(bgr_image, converted, cv::COLOR_BGR2GRAY);
+            cv::cvtColor(rgb_image, converted, cv::COLOR_RGB2GRAY);
             return converted;
         case 3:
-            cv::cvtColor(bgr_image, converted, cv::COLOR_BGR2RGB);
-            return converted;
+            return rgb_image;
         case 4:
-            cv::cvtColor(bgr_image, converted, cv::COLOR_BGR2RGBA);
+            cv::cvtColor(rgb_image, converted, cv::COLOR_RGB2RGBA);
             return converted;
         default:
             std::cerr << "unsupported Hailo input feature count: " << features << '\n';
@@ -386,14 +385,14 @@ std::vector<Detection> HailoDetector::detect(const catcheye::input::Frame& frame
         return {};
     }
 
-    const cv::Mat bgr = frame_to_bgr(frame);
-    if (bgr.empty()) {
+    const cv::Mat rgb = frame_to_rgb(frame);
+    if (rgb.empty()) {
         return {};
     }
 
     const int input_width = static_cast<int>(impl_->input_shape.width);
     const int input_height = static_cast<int>(impl_->input_shape.height);
-    const LetterboxResult preprocessed = letterbox(bgr, input_width, input_height);
+    const LetterboxResult preprocessed = letterbox(rgb, input_width, input_height);
 
     cv::Mat model_input = convert_to_hailo_input(preprocessed.image, impl_->input_shape.features);
     if (model_input.empty()) {
