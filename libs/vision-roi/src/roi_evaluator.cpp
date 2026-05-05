@@ -81,4 +81,32 @@ EvaluationResult evaluate_bbox_fully_inside(
     return {EvaluationStatus::Restricted, "bounding box is not fully contained in any enabled zone"};
 }
 
+EvaluationResult evaluate_bbox_intersects(
+    double x,
+    double y,
+    double width,
+    double height,
+    const CameraRoiConfig& config
+)
+{
+    if (!is_finite(x) || !is_finite(y) || !is_finite(width) || !is_finite(height)) {
+        return {EvaluationStatus::Invalid, "bbox inputs must be finite"};
+    }
+
+    if (width <= 0.0 || height <= 0.0) {
+        return {EvaluationStatus::Invalid, "bbox width and height must be > 0"};
+    }
+
+    const ValidationResult validation = validate_camera_roi_config(config);
+    if (!validation.valid) {
+        return {EvaluationStatus::Invalid, "ROI config failed validation"};
+    }
+
+    if (does_bounding_box_intersect_any_allowed_zone(x, y, width, height, config.allowed_zones)) {
+        return {EvaluationStatus::Allowed, "bounding box intersects an enabled zone"};
+    }
+
+    return {EvaluationStatus::Restricted, "bounding box is outside all enabled zones"};
+}
+
 } // namespace catcheye::roi

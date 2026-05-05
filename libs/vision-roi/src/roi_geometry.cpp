@@ -81,6 +81,14 @@ std::vector<Point> bounding_box_corners(double x, double y, double width, double
     };
 }
 
+bool point_in_rect(const Point& point, double x, double y, double width, double height)
+{
+    return point.x >= x - kEpsilon
+        && point.x <= x + width + kEpsilon
+        && point.y >= y - kEpsilon
+        && point.y <= y + height + kEpsilon;
+}
+
 } // namespace
 
 bool point_in_polygon(const Point& point, const std::vector<Point>& polygon_points)
@@ -266,6 +274,68 @@ bool is_bounding_box_inside_any_allowed_zone(
         }
 
         if (is_bounding_box_inside_polygon(x, y, width, height, zone)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool does_bounding_box_intersect_polygon(
+    double x,
+    double y,
+    double width,
+    double height,
+    const RoiPolygon& polygon
+)
+{
+    if (polygon.points.size() < 3) {
+        return false;
+    }
+
+    const std::vector<Point> corners = bounding_box_corners(x, y, width, height);
+    for (const Point& corner : corners) {
+        if (point_in_polygon(corner, polygon.points)) {
+            return true;
+        }
+    }
+
+    for (const Point& point : polygon.points) {
+        if (point_in_rect(point, x, y, width, height)) {
+            return true;
+        }
+    }
+
+    for (std::size_t i = 0; i < corners.size(); ++i) {
+        const Point& rect_a = corners[i];
+        const Point& rect_b = corners[(i + 1) % corners.size()];
+
+        for (std::size_t j = 0; j < polygon.points.size(); ++j) {
+            const Point& poly_a = polygon.points[j];
+            const Point& poly_b = polygon.points[(j + 1) % polygon.points.size()];
+            if (segments_intersect(rect_a, rect_b, poly_a, poly_b)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+bool does_bounding_box_intersect_any_allowed_zone(
+    double x,
+    double y,
+    double width,
+    double height,
+    const std::vector<RoiPolygon>& allowed_zones
+)
+{
+    for (const auto& zone : allowed_zones) {
+        if (!zone.enabled) {
+            continue;
+        }
+
+        if (does_bounding_box_intersect_polygon(x, y, width, height, zone)) {
             return true;
         }
     }

@@ -39,4 +39,12 @@ EvaluationResult evaluate_bbox_fully_inside(
     const CameraRoiConfig& config
 );
 
+EvaluationResult evaluate_bbox_intersects(
+    double x,
+    double y,
+    double width,
+    double height,
+    const CameraRoiConfig& config
+);
+
 } // namespace catcheye::roi

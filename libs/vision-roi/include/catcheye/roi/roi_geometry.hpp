@@ -48,4 +48,20 @@ bool is_bounding_box_inside_any_allowed_zone(
     const std::vector<RoiPolygon>& allowed_zones
 );
 
+bool does_bounding_box_intersect_polygon(
+    double x,
+    double y,
+    double width,
+    double height,
+    const RoiPolygon& polygon
+);
+
+bool does_bounding_box_intersect_any_allowed_zone(
+    double x,
+    double y,
+    double width,
+    double height,
+    const std::vector<RoiPolygon>& allowed_zones
+);
+
 } // namespace catcheye::roi
