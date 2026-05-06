@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
@@ -48,6 +49,13 @@ const char* pixel_format_name(catcheye::input::PixelFormat format) {
     }
 
     return "UNKNOWN";
+}
+
+std::uint64_t wall_clock_millis() {
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count());
 }
 
 cv::Mat frame_to_bgr(const catcheye::input::Frame& frame) {
@@ -285,7 +293,9 @@ std::string build_metadata_frame(
         << "\"height\":" << frame.height << ','
         << "\"stride\":" << frame.stride << ','
         << "\"pixel_format\":\"" << pixel_format_name(frame.format) << "\","
-        << "\"timestamp\":" << frame.timestamp << ','
+        // Monotonic source timestamp for frame interval/FPS calculations, not wall-clock time.
+        << "\"source_timestamp_ms\":" << frame.timestamp << ','
+        << "\"wall_timestamp_ms\":" << wall_clock_millis() << ','
         << "\"payload_encoding\":\"jpeg\","
         << "\"payload_size\":" << payload_size << ','
         << "\"metadata\":" << message.metadata_json
