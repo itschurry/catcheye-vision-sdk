@@ -303,27 +303,31 @@ std::string build_metadata_frame(
     return oss.str();
 }
 
-std::vector<std::uint8_t> websocket_frame(std::span<const std::uint8_t> payload, std::uint8_t opcode) {
+std::vector<std::uint8_t> websocket_header(std::size_t payload_size, std::uint8_t opcode) {
     std::vector<std::uint8_t> frame;
-    frame.reserve(payload.size() + 16U);
+    frame.reserve(16U);
 
     frame.push_back(static_cast<std::uint8_t>(0x80U | opcode));
-    if (payload.size() <= 125U) {
-        frame.push_back(static_cast<std::uint8_t>(payload.size()));
-    } else if (payload.size() <= 0xFFFFU) {
+    if (payload_size <= 125U) {
+        frame.push_back(static_cast<std::uint8_t>(payload_size));
+    } else if (payload_size <= 0xFFFFU) {
         frame.push_back(126U);
-        frame.push_back(static_cast<std::uint8_t>((payload.size() >> 8U) & 0xFFU));
-        frame.push_back(static_cast<std::uint8_t>(payload.size() & 0xFFU));
+        frame.push_back(static_cast<std::uint8_t>((payload_size >> 8U) & 0xFFU));
+        frame.push_back(static_cast<std::uint8_t>(payload_size & 0xFFU));
     } else {
         frame.push_back(127U);
-        const std::uint64_t size = static_cast<std::uint64_t>(payload.size());
+        const std::uint64_t size = static_cast<std::uint64_t>(payload_size);
         for (int shift = 56; shift >= 0; shift -= 8) {
             frame.push_back(static_cast<std::uint8_t>((size >> shift) & 0xFFU));
         }
     }
 
-    frame.insert(frame.end(), payload.begin(), payload.end());
     return frame;
+}
+
+bool send_websocket_frame(int sock_fd, std::span<const std::uint8_t> payload, std::uint8_t opcode) {
+    const auto header = websocket_header(payload.size(), opcode);
+    return send_all(sock_fd, header.data(), header.size()) && send_all(sock_fd, payload.data(), payload.size());
 }
 
 } // namespace
@@ -415,15 +419,15 @@ void WebSocketPublisher::publish(
     }
 
     const std::string metadata = build_metadata_frame(frame, message, context, jpeg_bytes.size());
-    const auto metadata_frame =
-        websocket_frame(std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(metadata.data()), metadata.size()), 0x1U);
-    const auto binary_frame = websocket_frame(jpeg_bytes, 0x2U);
+    const std::span<const std::uint8_t> metadata_payload{
+        reinterpret_cast<const std::uint8_t*>(metadata.data()),
+        metadata.size(),
+    };
 
     std::lock_guard<std::mutex> lock(clients_mutex_);
     auto it = client_fds_.begin();
     while (it != client_fds_.end()) {
-        const bool ok =
-            send_all(*it, metadata_frame.data(), metadata_frame.size()) && send_all(*it, binary_frame.data(), binary_frame.size());
+        const bool ok = send_websocket_frame(*it, metadata_payload, 0x1U) && send_websocket_frame(*it, jpeg_bytes, 0x2U);
         if (!ok) {
             ::shutdown(*it, SHUT_RDWR);
             ::close(*it);
@@ -441,24 +445,23 @@ void WebSocketPublisher::publish_payloads(
         return;
     }
 
-    const auto metadata_frame =
-        websocket_frame(std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(metadata.data()), metadata.size()), 0x1U);
-
-    std::vector<std::vector<std::uint8_t>> binary_frames;
-    binary_frames.reserve(payloads.size());
     for (const auto payload : payloads) {
         if (payload.empty()) {
             return;
         }
-        binary_frames.push_back(websocket_frame(payload, 0x2U));
     }
+
+    const std::span<const std::uint8_t> metadata_payload{
+        reinterpret_cast<const std::uint8_t*>(metadata.data()),
+        metadata.size(),
+    };
 
     std::lock_guard<std::mutex> lock(clients_mutex_);
     auto it = client_fds_.begin();
     while (it != client_fds_.end()) {
-        bool ok = send_all(*it, metadata_frame.data(), metadata_frame.size());
-        for (const auto& binary_frame : binary_frames) {
-            ok = ok && send_all(*it, binary_frame.data(), binary_frame.size());
+        bool ok = send_websocket_frame(*it, metadata_payload, 0x1U);
+        for (const auto payload : payloads) {
+            ok = ok && send_websocket_frame(*it, payload, 0x2U);
         }
         if (!ok) {
             ::shutdown(*it, SHUT_RDWR);
