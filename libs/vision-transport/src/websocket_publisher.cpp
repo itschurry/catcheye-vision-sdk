@@ -434,6 +434,42 @@ void WebSocketPublisher::publish(
     }
 }
 
+void WebSocketPublisher::publish_payloads(
+    std::string_view metadata,
+    std::span<const std::span<const std::uint8_t>> payloads) {
+    if (!running_ || metadata.empty() || payloads.empty()) {
+        return;
+    }
+
+    const auto metadata_frame =
+        websocket_frame(std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(metadata.data()), metadata.size()), 0x1U);
+
+    std::vector<std::vector<std::uint8_t>> binary_frames;
+    binary_frames.reserve(payloads.size());
+    for (const auto payload : payloads) {
+        if (payload.empty()) {
+            return;
+        }
+        binary_frames.push_back(websocket_frame(payload, 0x2U));
+    }
+
+    std::lock_guard<std::mutex> lock(clients_mutex_);
+    auto it = client_fds_.begin();
+    while (it != client_fds_.end()) {
+        bool ok = send_all(*it, metadata_frame.data(), metadata_frame.size());
+        for (const auto& binary_frame : binary_frames) {
+            ok = ok && send_all(*it, binary_frame.data(), binary_frame.size());
+        }
+        if (!ok) {
+            ::shutdown(*it, SHUT_RDWR);
+            ::close(*it);
+            it = client_fds_.erase(it);
+            continue;
+        }
+        ++it;
+    }
+}
+
 void WebSocketPublisher::accept_loop() {
     pollfd pfd{};
     pfd.fd = server_fd_;

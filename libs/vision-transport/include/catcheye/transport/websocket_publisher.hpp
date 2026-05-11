@@ -3,7 +3,9 @@
 #include <atomic>
 #include <cstdint>
 #include <mutex>
+#include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -32,6 +34,9 @@ class WebSocketPublisher final : public ResultPublisher {
         const catcheye::input::Frame& frame,
         const catcheye::protocol::FrameMessage& message,
         const PublishContext& context) override;
+    void publish_payloads(
+        std::string_view metadata,
+        std::span<const std::span<const std::uint8_t>> payloads);
 
   private:
     void accept_loop();
