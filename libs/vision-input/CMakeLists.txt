@@ -52,7 +52,7 @@ target_link_libraries(catcheye_vision_input
 
 target_compile_features(catcheye_vision_input PUBLIC cxx_std_20)
 
-if(CATCHEYE_VISION_INPUT_BUILD_TESTS)
+if(CATCHEYE_VISION_INPUT_BUILD_TESTS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_main.cpp")
     include(CTest)
     enable_testing()
 
