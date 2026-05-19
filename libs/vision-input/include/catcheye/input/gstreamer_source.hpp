@@ -1,6 +1,9 @@
 #pragma once
 
 #include <string>
+#include <mutex>
+#include <optional>
+#include <string_view>
 
 #include <gst/gst.h>
 #include <gst/app/gstappsink.h>
@@ -28,6 +31,11 @@ class GStreamerSource final : public FrameSource {
     FrameReadStatus read(Frame& frame) override;
     void close() override;
     std::string describe() const override;
+    std::optional<std::string> property_json(std::string_view key) const override;
+    bool set_bool_property(std::string_view key, bool value) override;
+    bool set_int_property(std::string_view key, int value) override;
+    bool set_float_property(std::string_view key, float value) override;
+    bool set_string_property(std::string_view key, std::string_view value) override;
 
     // Pipeline string helpers — callers pass the result to GStreamerSourceConfig::pipeline
     static std::string usb_camera_pipeline(
@@ -43,6 +51,7 @@ class GStreamerSource final : public FrameSource {
     GStreamerSourceConfig config_;
     GstElement* pipeline_ = nullptr;
     GstElement* appsink_ = nullptr;
+    mutable std::mutex property_mutex_;
     bool opened_ = false;
 };
 

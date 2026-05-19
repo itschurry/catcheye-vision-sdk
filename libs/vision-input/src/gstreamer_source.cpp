@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <iostream>
+#include <sstream>
 #include <string>
 
 #include <gst/video/video.h>
@@ -84,6 +85,116 @@ void log_gst_bus_messages(GstElement* pipeline, const std::string& context)
     }
 
     gst_object_unref(bus);
+}
+
+GstElement* find_property_owner(GstElement* pipeline, std::string_view key)
+{
+    if (pipeline == nullptr || !GST_IS_BIN(pipeline)) {
+        return nullptr;
+    }
+
+    GstIterator* iterator = gst_bin_iterate_recurse(GST_BIN(pipeline));
+    if (iterator == nullptr) {
+        return nullptr;
+    }
+
+    GValue item = G_VALUE_INIT;
+    GstElement* owner = nullptr;
+    bool done = false;
+    while (!done) {
+        switch (gst_iterator_next(iterator, &item)) {
+            case GST_ITERATOR_OK: {
+                auto* element = GST_ELEMENT(g_value_get_object(&item));
+                if (element != nullptr &&
+                    g_object_class_find_property(G_OBJECT_GET_CLASS(element), std::string(key).c_str()) != nullptr) {
+                    owner = GST_ELEMENT(gst_object_ref(element));
+                    done = true;
+                }
+                g_value_unset(&item);
+                break;
+            }
+            case GST_ITERATOR_RESYNC:
+                gst_iterator_resync(iterator);
+                break;
+            default:
+                done = true;
+                break;
+        }
+    }
+
+    gst_iterator_free(iterator);
+    return owner;
+}
+
+std::string json_string(std::string_view value)
+{
+    std::ostringstream oss;
+    oss << '"';
+    for (const char ch : value) {
+        if (ch == '"' || ch == '\\') {
+            oss << '\\';
+        }
+        oss << ch;
+    }
+    oss << '"';
+    return oss.str();
+}
+
+std::optional<int> enum_value_from_string(GParamSpec* spec, std::string_view value)
+{
+    if (spec == nullptr || !G_IS_PARAM_SPEC_ENUM(spec)) {
+        return std::nullopt;
+    }
+    auto* enum_class = G_ENUM_CLASS(g_type_class_ref(G_PARAM_SPEC_VALUE_TYPE(spec)));
+    if (enum_class == nullptr) {
+        return std::nullopt;
+    }
+    const std::string text(value);
+    GEnumValue* enum_value = g_enum_get_value_by_nick(enum_class, text.c_str());
+    if (enum_value == nullptr) {
+        enum_value = g_enum_get_value_by_name(enum_class, text.c_str());
+    }
+    const std::optional<int> result = enum_value == nullptr ? std::nullopt : std::optional<int>{enum_value->value};
+    g_type_class_unref(enum_class);
+    return result;
+}
+
+std::optional<std::string> gvalue_to_json(const GValue& value)
+{
+    const GType type = G_VALUE_TYPE(&value);
+    if (type == G_TYPE_BOOLEAN) {
+        return g_value_get_boolean(&value) ? "true" : "false";
+    }
+    if (type == G_TYPE_INT) {
+        return std::to_string(g_value_get_int(&value));
+    }
+    if (type == G_TYPE_UINT) {
+        return std::to_string(g_value_get_uint(&value));
+    }
+    if (type == G_TYPE_INT64) {
+        return std::to_string(g_value_get_int64(&value));
+    }
+    if (type == G_TYPE_UINT64) {
+        return std::to_string(g_value_get_uint64(&value));
+    }
+    if (type == G_TYPE_FLOAT) {
+        return std::to_string(g_value_get_float(&value));
+    }
+    if (type == G_TYPE_DOUBLE) {
+        return std::to_string(g_value_get_double(&value));
+    }
+    if (G_TYPE_IS_ENUM(type)) {
+        auto* enum_class = G_ENUM_CLASS(g_type_class_ref(type));
+        if (enum_class == nullptr) {
+            return std::nullopt;
+        }
+        GEnumValue* enum_value = g_enum_get_value(enum_class, g_value_get_enum(&value));
+        const std::optional<std::string> result =
+            enum_value == nullptr ? std::nullopt : std::optional<std::string>{json_string(enum_value->value_nick)};
+        g_type_class_unref(enum_class);
+        return result;
+    }
+    return std::nullopt;
 }
 
 } // namespace
@@ -214,6 +325,99 @@ void GStreamerSource::close()
 std::string GStreamerSource::describe() const
 {
     return "gstreamer:" + config_.pipeline;
+}
+
+std::optional<std::string> GStreamerSource::property_json(std::string_view key) const
+{
+    std::lock_guard<std::mutex> lock(property_mutex_);
+    if (!opened_ || pipeline_ == nullptr) {
+        return std::nullopt;
+    }
+
+    GstElement* owner = find_property_owner(pipeline_, key);
+    if (owner == nullptr) {
+        return std::nullopt;
+    }
+
+    GParamSpec* spec = g_object_class_find_property(G_OBJECT_GET_CLASS(owner), std::string(key).c_str());
+    if (spec == nullptr) {
+        gst_object_unref(owner);
+        return std::nullopt;
+    }
+
+    GValue value = G_VALUE_INIT;
+    g_value_init(&value, G_PARAM_SPEC_VALUE_TYPE(spec));
+    g_object_get_property(G_OBJECT(owner), std::string(key).c_str(), &value);
+    const auto json = gvalue_to_json(value);
+    g_value_unset(&value);
+    gst_object_unref(owner);
+    return json;
+}
+
+bool GStreamerSource::set_bool_property(std::string_view key, bool value)
+{
+    std::lock_guard<std::mutex> lock(property_mutex_);
+    if (!opened_ || pipeline_ == nullptr) {
+        return false;
+    }
+    GstElement* owner = find_property_owner(pipeline_, key);
+    if (owner == nullptr) {
+        return false;
+    }
+    g_object_set(G_OBJECT(owner), std::string(key).c_str(), value ? TRUE : FALSE, nullptr);
+    gst_object_unref(owner);
+    return true;
+}
+
+bool GStreamerSource::set_int_property(std::string_view key, int value)
+{
+    std::lock_guard<std::mutex> lock(property_mutex_);
+    if (!opened_ || pipeline_ == nullptr) {
+        return false;
+    }
+    GstElement* owner = find_property_owner(pipeline_, key);
+    if (owner == nullptr) {
+        return false;
+    }
+    g_object_set(G_OBJECT(owner), std::string(key).c_str(), value, nullptr);
+    gst_object_unref(owner);
+    return true;
+}
+
+bool GStreamerSource::set_float_property(std::string_view key, float value)
+{
+    std::lock_guard<std::mutex> lock(property_mutex_);
+    if (!opened_ || pipeline_ == nullptr) {
+        return false;
+    }
+    GstElement* owner = find_property_owner(pipeline_, key);
+    if (owner == nullptr) {
+        return false;
+    }
+    g_object_set(G_OBJECT(owner), std::string(key).c_str(), value, nullptr);
+    gst_object_unref(owner);
+    return true;
+}
+
+bool GStreamerSource::set_string_property(std::string_view key, std::string_view value)
+{
+    std::lock_guard<std::mutex> lock(property_mutex_);
+    if (!opened_ || pipeline_ == nullptr) {
+        return false;
+    }
+    GstElement* owner = find_property_owner(pipeline_, key);
+    if (owner == nullptr) {
+        return false;
+    }
+    GParamSpec* spec = g_object_class_find_property(G_OBJECT_GET_CLASS(owner), std::string(key).c_str());
+    const auto enum_value = enum_value_from_string(spec, value);
+    if (!enum_value.has_value()) {
+        gst_object_unref(owner);
+        return false;
+    }
+    g_object_set(G_OBJECT(owner), std::string(key).c_str(), *enum_value, nullptr);
+    gst_object_unref(owner);
+    return true;
 }
 
 std::string GStreamerSource::usb_camera_pipeline(

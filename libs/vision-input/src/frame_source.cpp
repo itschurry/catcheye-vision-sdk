@@ -47,6 +47,31 @@ std::unique_ptr<FrameSource> create_frame_source(const InputSourceConfig& config
     throw std::runtime_error("unsupported input source type");
 }
 
+std::optional<std::string> FrameSource::property_json(std::string_view) const
+{
+    return std::nullopt;
+}
+
+bool FrameSource::set_bool_property(std::string_view, bool)
+{
+    return false;
+}
+
+bool FrameSource::set_int_property(std::string_view, int)
+{
+    return false;
+}
+
+bool FrameSource::set_float_property(std::string_view, float)
+{
+    return false;
+}
+
+bool FrameSource::set_string_property(std::string_view, std::string_view)
+{
+    return false;
+}
+
 std::string default_camera_pipeline()
 {
     return GStreamerSource::usb_camera_pipeline();

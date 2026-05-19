@@ -25,6 +25,7 @@ elseif(MSVC)
 endif()
 
 find_package(PkgConfig REQUIRED)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc calib3d)
 pkg_check_modules(LIBCAMERA REQUIRED IMPORTED_TARGET libcamera)
 pkg_check_modules(GSTREAMER REQUIRED IMPORTED_TARGET gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0)
 
@@ -32,6 +33,7 @@ add_library(catcheye_vision_input STATIC
     src/frame_source.cpp
     src/libcamera_source.cpp
     src/gstreamer_source.cpp
+    src/rgb_intrinsic_calibrator.cpp
 )
 add_library(catcheye::vision_input ALIAS catcheye_vision_input)
 set_target_properties(catcheye_vision_input PROPERTIES EXPORT_NAME vision_input)
@@ -42,12 +44,14 @@ target_include_directories(catcheye_vision_input
         $<INSTALL_INTERFACE:include>
         ${LIBCAMERA_INCLUDE_DIRS}
         ${GSTREAMER_INCLUDE_DIRS}
+        ${OpenCV_INCLUDE_DIRS}
 )
 
 target_link_libraries(catcheye_vision_input
     PUBLIC
         PkgConfig::LIBCAMERA
         PkgConfig::GSTREAMER
+        ${OpenCV_LIBS}
 )
 
 target_compile_features(catcheye_vision_input PUBLIC cxx_std_20)
