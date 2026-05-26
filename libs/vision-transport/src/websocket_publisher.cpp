@@ -4,6 +4,7 @@
 #include <array>
 #include <chrono>
 #include <cctype>
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -28,6 +29,8 @@ namespace {
 
 constexpr int SOCKET_ENABLE = 1;
 constexpr int POLL_TIMEOUT_MS = 200;
+constexpr int SEND_RETRY_POLL_MS = 20;
+constexpr int SEND_TIMEOUT_MS = 1000;
 constexpr std::size_t MAX_HANDSHAKE_BYTES = 8192;
 
 const char* pixel_format_name(catcheye::input::PixelFormat format) {
@@ -128,13 +131,34 @@ bool encode_jpeg_payload(const catcheye::input::Frame& frame, std::vector<std::u
 bool send_all(int sock_fd, const void* data, std::size_t size) {
     const auto* bytes = static_cast<const std::byte*>(data);
     std::span<const std::byte> remaining{bytes, size};
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(SEND_TIMEOUT_MS);
 
     while (!remaining.empty()) {
-        const ssize_t written = ::send(sock_fd, remaining.data(), remaining.size(), MSG_NOSIGNAL);
-        if (written <= 0) {
+        const ssize_t written = ::send(sock_fd, remaining.data(), remaining.size(), MSG_NOSIGNAL | MSG_DONTWAIT);
+        if (written > 0) {
+            remaining = remaining.subspan(static_cast<std::size_t>(written));
+            continue;
+        }
+        if (written == 0) {
             return false;
         }
-        remaining = remaining.subspan(static_cast<std::size_t>(written));
+        if (errno == EINTR) {
+            continue;
+        }
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            return false;
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+            return false;
+        }
+
+        pollfd pfd{};
+        pfd.fd = sock_fd;
+        pfd.events = POLLOUT;
+        const int poll_result = ::poll(&pfd, 1, SEND_RETRY_POLL_MS);
+        if (poll_result < 0 && errno != EINTR) {
+            return false;
+        }
     }
 
     return true;

@@ -17,3 +17,4 @@
   - runtime이 호출하는 공통 publish 인터페이스
 - `WebSocketPublisher`
   - frame metadata JSON + binary JPEG payload를 WebSocket으로 전송하는 기본 구현체
+  - 송신 버퍼가 막히면 non-blocking send + `poll(POLLOUT)`로 최대 1초만 기다리고 실패 처리한다
