@@ -6,8 +6,7 @@ project(catcheye-vision-detection
     LANGUAGES CXX
 )
 
-option(CATCHEYE_VISION_DETECTION_ENABLE_NCNN "Build NCNN detector backend" ON)
-option(CATCHEYE_VISION_DETECTION_ENABLE_HAILO "Build HailoRT detector backend" OFF)
+option(CATCHEYE_VISION_DETECTION_ENABLE_HAILO "Build HailoRT detector backend" ON)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -39,7 +38,7 @@ endif()
 
 set(CATCHEYE_VISION_DETECTION_SOURCES)
 
-if(CATCHEYE_VISION_DETECTION_ENABLE_NCNN OR CATCHEYE_VISION_DETECTION_ENABLE_HAILO)
+if(CATCHEYE_VISION_DETECTION_ENABLE_HAILO)
     list(APPEND CATCHEYE_VISION_DETECTION_SOURCES
         src/postprocess/postprocess.cpp
         src/postprocess/yolo_decoder.cpp
@@ -52,24 +51,11 @@ function(catcheye_vision_detection_normalize_yaml_cpp_target)
     endif()
 endfunction()
 
-if(CATCHEYE_VISION_DETECTION_ENABLE_NCNN)
-    find_package(OpenCV REQUIRED COMPONENTS core imgproc dnn)
-    find_package(ncnn REQUIRED)
-    find_package(yaml-cpp REQUIRED)
-    catcheye_vision_detection_normalize_yaml_cpp_target()
-
-    list(APPEND CATCHEYE_VISION_DETECTION_SOURCES
-        src/ncnn/ncnn_detector.cpp
-    )
-endif()
-
 if(CATCHEYE_VISION_DETECTION_ENABLE_HAILO)
     find_package(HailoRT REQUIRED)
-    if(NOT CATCHEYE_VISION_DETECTION_ENABLE_NCNN)
-        find_package(OpenCV REQUIRED COMPONENTS core imgproc dnn)
-        find_package(yaml-cpp REQUIRED)
-        catcheye_vision_detection_normalize_yaml_cpp_target()
-    endif()
+    find_package(OpenCV REQUIRED COMPONENTS core imgproc dnn)
+    find_package(yaml-cpp REQUIRED)
+    catcheye_vision_detection_normalize_yaml_cpp_target()
 
     list(APPEND CATCHEYE_VISION_DETECTION_SOURCES
         src/hailo/hailo_detector.cpp
@@ -95,26 +81,6 @@ target_link_libraries(catcheye_vision_detection
 )
 
 target_compile_features(catcheye_vision_detection PUBLIC cxx_std_20)
-
-if(CATCHEYE_VISION_DETECTION_ENABLE_NCNN)
-    target_include_directories(catcheye_vision_detection
-        PRIVATE
-            ${OpenCV_INCLUDE_DIRS}
-    )
-
-    target_link_libraries(catcheye_vision_detection
-        PUBLIC
-            ncnn
-        PRIVATE
-            ${OpenCV_LIBS}
-            yaml-cpp::yaml-cpp
-    )
-
-    target_compile_definitions(catcheye_vision_detection
-        PUBLIC
-            CATCHEYE_VISION_DETECTION_HAS_NCNN=1
-    )
-endif()
 
 if(CATCHEYE_VISION_DETECTION_ENABLE_HAILO)
     target_include_directories(catcheye_vision_detection
