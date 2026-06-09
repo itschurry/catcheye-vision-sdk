@@ -4,7 +4,9 @@
 #include <stdexcept>
 
 #include "catcheye/input/gstreamer_source.hpp"
+#if defined(CATCHEYE_VISION_INPUT_HAS_LIBCAMERA)
 #include "catcheye/input/libcamera_source.hpp"
+#endif
 
 namespace catcheye::input {
 
@@ -36,12 +38,16 @@ std::unique_ptr<FrameSource> create_frame_source(const InputSourceConfig& config
                             config.camera_height),
                     });
             }
+#if defined(CATCHEYE_VISION_INPUT_HAS_LIBCAMERA)
             return std::make_unique<LibCameraSource>(
                 LibCameraConfig {
                     .width = config.camera_width,
                     .height = config.camera_height,
                     .camera_id = {},
                 });
+#else
+            throw std::runtime_error("libcamera input backend was not built; provide camera_pipeline or camera_device");
+#endif
     }
 
     throw std::runtime_error("unsupported input source type");

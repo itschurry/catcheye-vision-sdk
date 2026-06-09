@@ -36,14 +36,10 @@ if(NOT TARGET catcheye_vision_input AND NOT TARGET catcheye::vision_input)
     )
 endif()
 
-set(CATCHEYE_VISION_DETECTION_SOURCES)
-
-if(CATCHEYE_VISION_DETECTION_ENABLE_HAILO)
-    list(APPEND CATCHEYE_VISION_DETECTION_SOURCES
-        src/postprocess/postprocess.cpp
-        src/postprocess/yolo_decoder.cpp
-    )
-endif()
+set(CATCHEYE_VISION_DETECTION_SOURCES
+    src/postprocess/postprocess.cpp
+    src/postprocess/yolo_decoder.cpp
+)
 
 function(catcheye_vision_detection_normalize_yaml_cpp_target)
     if(TARGET yaml-cpp AND NOT TARGET yaml-cpp::yaml-cpp)
@@ -53,7 +49,6 @@ endfunction()
 
 if(CATCHEYE_VISION_DETECTION_ENABLE_HAILO)
     find_package(HailoRT REQUIRED)
-    find_package(OpenCV REQUIRED COMPONENTS core imgproc dnn)
     find_package(yaml-cpp REQUIRED)
     catcheye_vision_detection_normalize_yaml_cpp_target()
 
@@ -62,6 +57,8 @@ if(CATCHEYE_VISION_DETECTION_ENABLE_HAILO)
         src/hailo/hailo_nms_decoder.cpp
     )
 endif()
+
+find_package(OpenCV REQUIRED COMPONENTS core dnn)
 
 add_library(catcheye_vision_detection STATIC
     ${CATCHEYE_VISION_DETECTION_SOURCES}
@@ -73,26 +70,24 @@ target_include_directories(catcheye_vision_detection
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
+    PRIVATE
+        ${OpenCV_INCLUDE_DIRS}
 )
 
 target_link_libraries(catcheye_vision_detection
     PUBLIC
         catcheye::vision_input
+    PRIVATE
+        ${OpenCV_LIBS}
 )
 
 target_compile_features(catcheye_vision_detection PUBLIC cxx_std_20)
 
 if(CATCHEYE_VISION_DETECTION_ENABLE_HAILO)
-    target_include_directories(catcheye_vision_detection
-        PRIVATE
-            ${OpenCV_INCLUDE_DIRS}
-    )
-
     target_link_libraries(catcheye_vision_detection
         PUBLIC
             HailoRT::libhailort
         PRIVATE
-            ${OpenCV_LIBS}
             yaml-cpp::yaml-cpp
     )
 
