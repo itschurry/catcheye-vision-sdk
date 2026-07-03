@@ -25,6 +25,7 @@ struct HttpResponse {
     int status_code = 200;
     std::string status_text = "OK";
     std::string body = "{}";
+    std::string content_type = "application/json";
 };
 
 using RouteHandler = std::function<HttpResponse(const HttpRequest&)>;

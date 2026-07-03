@@ -326,7 +326,7 @@ bool HttpServer::send_response(int client_fd, const HttpResponse& response) cons
 {
     std::ostringstream oss;
     oss << "HTTP/1.1 " << response.status_code << ' ' << response.status_text << "\r\n"
-        << "Content-Type: application/json\r\n"
+        << "Content-Type: " << response.content_type << "\r\n"
         << "Content-Length: " << response.body.size() << "\r\n"
         << "Connection: close\r\n\r\n"
         << response.body;
