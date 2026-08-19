@@ -147,6 +147,79 @@ BoundingBox map_center_box(float center_x,
     };
 }
 
+BoundingBox map_corner_box(float x_min,
+                           float y_min,
+                           float x_max,
+                           float y_max,
+                           const ModelDecodeContext& context)
+{
+    if (std::max({std::abs(x_min), std::abs(y_min), std::abs(x_max), std::abs(y_max)}) <= 1.5F) {
+        x_min *= static_cast<float>(context.input_width);
+        x_max *= static_cast<float>(context.input_width);
+        y_min *= static_cast<float>(context.input_height);
+        y_max *= static_cast<float>(context.input_height);
+    }
+
+    const float left = static_cast<float>(context.pad_width / 2);
+    const float top = static_cast<float>(context.pad_height / 2);
+    x_min = std::clamp((x_min - left) / context.letterbox_scale,
+                       0.0F, static_cast<float>(context.original_width - 1));
+    x_max = std::clamp((x_max - left) / context.letterbox_scale,
+                       0.0F, static_cast<float>(context.original_width - 1));
+    y_min = std::clamp((y_min - top) / context.letterbox_scale,
+                       0.0F, static_cast<float>(context.original_height - 1));
+    y_max = std::clamp((y_max - top) / context.letterbox_scale,
+                       0.0F, static_cast<float>(context.original_height - 1));
+
+    return BoundingBox {
+        .x = x_min,
+        .y = y_min,
+        .width = std::max(0.0F, x_max - x_min),
+        .height = std::max(0.0F, y_max - y_min),
+    };
+}
+
+DecodeResult decode_ultralytics_end_to_end(
+    const std::vector<TensorView>& outputs,
+    const ModelDecodeContext& context,
+    int num_classes)
+{
+    DecodeResult result {
+        .candidates = {},
+        .nms_already_applied = true,
+        .requires_nms = false,
+    };
+    for (const TensorView& tensor : outputs) {
+        if (tensor.data_type != TensorDataType::Float32 || tensor.data == nullptr ||
+            tensor.shape.size() != 3U || tensor.shape[0] != 1 ||
+            tensor.shape[1] <= 0 || tensor.shape[2] < 6) {
+            continue;
+        }
+        const int candidate_count = tensor.shape[1];
+        const int attribute_count = tensor.shape[2];
+        const auto* values = static_cast<const float*>(tensor.data);
+        result.candidates.reserve(static_cast<std::size_t>(candidate_count));
+        for (int index = 0; index < candidate_count; ++index) {
+            const auto offset = static_cast<std::size_t>(index) * static_cast<std::size_t>(attribute_count);
+            const int class_id = static_cast<int>(std::lround(values[offset + 5U]));
+            if (class_id < 0 || (num_classes > 0 && class_id >= num_classes)) {
+                continue;
+            }
+            const BoundingBox box = map_corner_box(
+                values[offset], values[offset + 1U], values[offset + 2U], values[offset + 3U], context);
+            if (box.width <= 1.0F || box.height <= 1.0F) {
+                continue;
+            }
+            result.candidates.push_back(DetectionCandidate {
+                .class_id = class_id,
+                .score = values[offset + 4U],
+                .box = box,
+            });
+        }
+    }
+    return result;
+}
+
 bool is_split_box_head(const TensorView& tensor)
 {
     return tensor.data_type == TensorDataType::Float32 &&
@@ -338,6 +411,10 @@ DecodeResult YoloDecoder::decode(
     if (!valid_context(context)) {
         std::cerr << "invalid YOLO decode context\n";
         return result;
+    }
+
+    if (options_.output_format == YoloOutputFormat::UltralyticsEndToEnd) {
+        return decode_ultralytics_end_to_end(outputs, context, options_.num_classes);
     }
 
     const std::vector<SplitHeadPair> split_head_pairs = find_split_head_pairs(outputs, options_.num_classes);

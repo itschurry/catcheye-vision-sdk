@@ -8,9 +8,15 @@
 
 namespace catcheye::detection {
 
+enum class YoloOutputFormat {
+    RawClassScores,
+    UltralyticsEndToEnd,
+};
+
 struct YoloDecoderOptions {
     int num_classes = 0;
     bool requires_nms = true;
+    YoloOutputFormat output_format = YoloOutputFormat::RawClassScores;
 };
 
 class YoloDecoder {

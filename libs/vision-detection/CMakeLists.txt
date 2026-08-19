@@ -7,6 +7,7 @@ project(catcheye-vision-detection
 )
 
 option(CATCHEYE_VISION_DETECTION_ENABLE_HAILO "Build HailoRT detector backend" ON)
+option(CATCHEYE_VISION_DETECTION_ENABLE_TENSORRT "Build TensorRT detector backend" OFF)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -49,7 +50,9 @@ endfunction()
 
 if(CATCHEYE_VISION_DETECTION_ENABLE_HAILO)
     find_package(HailoRT REQUIRED)
-    find_package(yaml-cpp REQUIRED)
+    if(NOT TARGET yaml-cpp AND NOT TARGET yaml-cpp::yaml-cpp)
+        find_package(yaml-cpp REQUIRED)
+    endif()
     catcheye_vision_detection_normalize_yaml_cpp_target()
 
     list(APPEND CATCHEYE_VISION_DETECTION_SOURCES
@@ -58,7 +61,21 @@ if(CATCHEYE_VISION_DETECTION_ENABLE_HAILO)
     )
 endif()
 
-find_package(OpenCV REQUIRED COMPONENTS core dnn)
+if(CATCHEYE_VISION_DETECTION_ENABLE_TENSORRT)
+    list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+    find_package(TensorRT REQUIRED)
+    find_package(CUDAToolkit REQUIRED)
+    if(NOT TARGET yaml-cpp AND NOT TARGET yaml-cpp::yaml-cpp)
+        find_package(yaml-cpp REQUIRED)
+    endif()
+    catcheye_vision_detection_normalize_yaml_cpp_target()
+
+    list(APPEND CATCHEYE_VISION_DETECTION_SOURCES
+        src/tensorrt/tensorrt_detector.cpp
+    )
+endif()
+
+find_package(OpenCV REQUIRED COMPONENTS core dnn imgproc)
 
 add_library(catcheye_vision_detection STATIC
     ${CATCHEYE_VISION_DETECTION_SOURCES}
@@ -94,5 +111,19 @@ if(CATCHEYE_VISION_DETECTION_ENABLE_HAILO)
     target_compile_definitions(catcheye_vision_detection
         PUBLIC
             CATCHEYE_VISION_DETECTION_HAS_HAILO=1
+    )
+endif()
+
+if(CATCHEYE_VISION_DETECTION_ENABLE_TENSORRT)
+    target_link_libraries(catcheye_vision_detection
+        PRIVATE
+            TensorRT::nvinfer
+            CUDA::cudart
+            yaml-cpp::yaml-cpp
+    )
+
+    target_compile_definitions(catcheye_vision_detection
+        PUBLIC
+            CATCHEYE_VISION_DETECTION_HAS_TENSORRT=1
     )
 endif()
