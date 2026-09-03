@@ -5,6 +5,8 @@
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <cerrno>
+#include <chrono>
 #include <sstream>
 #include <span>
 #include <string_view>
@@ -23,13 +25,41 @@ constexpr int SOCKET_ENABLE = 1;
 constexpr int POLL_TIMEOUT_MS = 200;
 constexpr std::size_t MAX_REQUEST_BYTES = 1024 * 1024;
 
-bool send_all(int sock_fd, const void* data, std::size_t size)
+using Clock = std::chrono::steady_clock;
+
+bool wait_socket(int fd, short events, Clock::time_point deadline, const std::atomic<bool>& running)
+{
+    while (running && Clock::now() < deadline) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
+        pollfd socket{fd, events, 0};
+        const int result = ::poll(&socket, 1, static_cast<int>(std::clamp<std::int64_t>(remaining, 1, 20)));
+        if (result > 0) return (socket.revents & events) != 0;
+        if (result < 0 && errno != EINTR) return false;
+    }
+    return false;
+}
+
+ssize_t receive_until(int fd, void* data, std::size_t size, Clock::time_point deadline,
+    const std::atomic<bool>& running)
+{
+    while (wait_socket(fd, POLLIN, deadline, running)) {
+        const auto received = ::recv(fd, data, size, MSG_DONTWAIT);
+        if (received >= 0) return received;
+        if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) return -1;
+    }
+    return -1;
+}
+
+bool send_all(int sock_fd, const void* data, std::size_t size, Clock::time_point deadline,
+    const std::atomic<bool>& running)
 {
     const auto* bytes = static_cast<const std::byte*>(data);
     std::span<const std::byte> remaining{bytes, size};
 
     while (!remaining.empty()) {
-        const ssize_t written = ::send(sock_fd, remaining.data(), remaining.size(), MSG_NOSIGNAL);
+        if (!wait_socket(sock_fd, POLLOUT, deadline, running)) return false;
+        const ssize_t written = ::send(sock_fd, remaining.data(), remaining.size(), MSG_NOSIGNAL | MSG_DONTWAIT);
+        if (written < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) continue;
         if (written <= 0) {
             return false;
         }
@@ -87,7 +117,8 @@ bool parse_request_line(std::string_view request, std::string& method, std::stri
     return static_cast<bool>(iss >> method >> path >> version);
 }
 
-bool read_http_request(int client_fd, std::string& request, std::string& body)
+bool read_http_request(int client_fd, std::string& request, std::string& body,
+    Clock::time_point deadline, const std::atomic<bool>& running)
 {
     request.clear();
     body.clear();
@@ -95,7 +126,7 @@ bool read_http_request(int client_fd, std::string& request, std::string& body)
     std::array<char, 4096> buffer{};
     std::size_t header_end = std::string::npos;
     while (request.size() < MAX_REQUEST_BYTES) {
-        const ssize_t received = ::recv(client_fd, buffer.data(), buffer.size(), 0);
+        const ssize_t received = receive_until(client_fd, buffer.data(), buffer.size(), deadline, running);
         if (received <= 0) {
             return false;
         }
@@ -111,11 +142,14 @@ bool read_http_request(int client_fd, std::string& request, std::string& body)
     }
 
     const std::string headers = request.substr(0, header_end + 4U);
+    if (headers.size() > MAX_REQUEST_BYTES) return false;
     std::size_t content_length = 0;
     const std::string content_length_text = header_value(headers, "Content-Length");
     if (!content_length_text.empty()) {
         try {
-            content_length = static_cast<std::size_t>(std::stoul(content_length_text));
+            std::size_t consumed = 0;
+            content_length = static_cast<std::size_t>(std::stoul(content_length_text, &consumed));
+            if (consumed != content_length_text.size() || content_length > MAX_REQUEST_BYTES - headers.size()) return false;
         } catch (...) {
             return false;
         }
@@ -123,7 +157,7 @@ bool read_http_request(int client_fd, std::string& request, std::string& body)
 
     body = request.substr(header_end + 4U);
     while (body.size() < content_length && request.size() < MAX_REQUEST_BYTES) {
-        const ssize_t received = ::recv(client_fd, buffer.data(), buffer.size(), 0);
+        const ssize_t received = receive_until(client_fd, buffer.data(), buffer.size(), deadline, running);
         if (received <= 0) {
             return false;
         }
@@ -214,11 +248,11 @@ bool HttpServer::start()
     if (running_) {
         return true;
     }
-    if (config_.port <= 0) {
+    if (config_.port <= 0 || config_.port > 65535 || config_.request_timeout_ms <= 0 || config_.response_timeout_ms <= 0) {
         return false;
     }
 
-    server_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+    server_fd_ = ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
     if (server_fd_ < 0) {
         return false;
     }
@@ -256,12 +290,14 @@ void HttpServer::stop()
     running_ = false;
     if (server_fd_ >= 0) {
         ::shutdown(server_fd_, SHUT_RDWR);
-        ::close(server_fd_);
-        server_fd_ = -1;
     }
 
     if (accept_thread_.joinable()) {
         accept_thread_.join();
+    }
+    if (server_fd_ >= 0) {
+        ::close(server_fd_);
+        server_fd_ = -1;
     }
 }
 
@@ -294,8 +330,11 @@ void HttpServer::handle_client(int client_fd)
 {
     std::string raw_request;
     std::string body;
-    if (!read_http_request(client_fd, raw_request, body)) {
-        send_response(client_fd, HttpResponse{400, "Bad Request", json_error_body("failed to read HTTP request")});
+    const auto deadline = Clock::now() + std::chrono::milliseconds(config_.request_timeout_ms);
+    if (!read_http_request(client_fd, raw_request, body, deadline, running_)) {
+        const bool timed_out = Clock::now() >= deadline;
+        send_response(client_fd, HttpResponse{timed_out ? 408 : 400,
+            timed_out ? "Request Timeout" : "Bad Request", json_error_body("failed to read HTTP request")});
         return;
     }
 
@@ -331,7 +370,8 @@ bool HttpServer::send_response(int client_fd, const HttpResponse& response) cons
         << "Connection: close\r\n\r\n"
         << response.body;
     const std::string payload = oss.str();
-    return send_all(client_fd, payload.data(), payload.size());
+    return send_all(client_fd, payload.data(), payload.size(),
+        Clock::now() + std::chrono::milliseconds(config_.response_timeout_ms), running_);
 }
 
 } // namespace catcheye::http

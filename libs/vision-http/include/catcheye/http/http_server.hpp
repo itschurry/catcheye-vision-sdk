@@ -13,6 +13,8 @@ namespace catcheye::http {
 struct HttpServerConfig {
     std::string bind_address = "0.0.0.0";
     int port = 8090;
+    int request_timeout_ms = 2000;
+    int response_timeout_ms = 2000;
 };
 
 struct HttpRequest {

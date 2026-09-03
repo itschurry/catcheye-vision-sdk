@@ -17,6 +17,8 @@ struct WebSocketPublisherConfig {
     std::string bind_address = "0.0.0.0";
     int port = 8080;
     int max_clients = 4;
+    int handshake_timeout_ms = 2000;
+    int send_timeout_ms = 1000;
 };
 
 class WebSocketPublisher final : public ResultPublisher {

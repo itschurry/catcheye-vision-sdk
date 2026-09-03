@@ -29,9 +29,19 @@ namespace {
 
 constexpr int SOCKET_ENABLE = 1;
 constexpr int POLL_TIMEOUT_MS = 200;
-constexpr int SEND_RETRY_POLL_MS = 20;
-constexpr int SEND_TIMEOUT_MS = 1000;
 constexpr std::size_t MAX_HANDSHAKE_BYTES = 8192;
+using Clock = std::chrono::steady_clock;
+
+bool wait_socket(int fd, short events, Clock::time_point deadline, const std::atomic<bool>& running) {
+    while (running && Clock::now() < deadline) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
+        pollfd socket{fd, events, 0};
+        const int result = ::poll(&socket, 1, static_cast<int>(std::clamp<std::int64_t>(remaining, 1, 20)));
+        if (result > 0) return (socket.revents & events) != 0;
+        if (result < 0 && errno != EINTR) return false;
+    }
+    return false;
+}
 
 const char* pixel_format_name(catcheye::input::PixelFormat format) {
     switch (format) {
@@ -128,12 +138,12 @@ bool encode_jpeg_payload(const catcheye::input::Frame& frame, std::vector<std::u
     return cv::imencode(".jpg", bgr, jpeg_bytes, encode_params);
 }
 
-bool send_all(int sock_fd, const void* data, std::size_t size) {
+bool send_all(int sock_fd, const void* data, std::size_t size, Clock::time_point deadline,
+    const std::atomic<bool>& running) {
     const auto* bytes = static_cast<const std::byte*>(data);
     std::span<const std::byte> remaining{bytes, size};
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(SEND_TIMEOUT_MS);
-
     while (!remaining.empty()) {
+        if (!wait_socket(sock_fd, POLLOUT, deadline, running)) return false;
         const ssize_t written = ::send(sock_fd, remaining.data(), remaining.size(), MSG_NOSIGNAL | MSG_DONTWAIT);
         if (written > 0) {
             remaining = remaining.subspan(static_cast<std::size_t>(written));
@@ -146,17 +156,6 @@ bool send_all(int sock_fd, const void* data, std::size_t size) {
             continue;
         }
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
-            return false;
-        }
-        if (std::chrono::steady_clock::now() >= deadline) {
-            return false;
-        }
-
-        pollfd pfd{};
-        pfd.fd = sock_fd;
-        pfd.events = POLLOUT;
-        const int poll_result = ::poll(&pfd, 1, SEND_RETRY_POLL_MS);
-        if (poll_result < 0 && errno != EINTR) {
             return false;
         }
     }
@@ -349,9 +348,11 @@ std::vector<std::uint8_t> websocket_header(std::size_t payload_size, std::uint8_
     return frame;
 }
 
-bool send_websocket_frame(int sock_fd, std::span<const std::uint8_t> payload, std::uint8_t opcode) {
+bool send_websocket_frame(int sock_fd, std::span<const std::uint8_t> payload, std::uint8_t opcode,
+    Clock::time_point deadline, const std::atomic<bool>& running) {
     const auto header = websocket_header(payload.size(), opcode);
-    return send_all(sock_fd, header.data(), header.size()) && send_all(sock_fd, payload.data(), payload.size());
+    return send_all(sock_fd, header.data(), header.size(), deadline, running) &&
+        send_all(sock_fd, payload.data(), payload.size(), deadline, running);
 }
 
 } // namespace
@@ -375,7 +376,10 @@ bool WebSocketPublisher::start() {
         return true;
     }
 
-    server_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (config_.port <= 0 || config_.port > 65535 || config_.max_clients <= 0 || config_.handshake_timeout_ms <= 0 || config_.send_timeout_ms <= 0) {
+        return false;
+    }
+    server_fd_ = ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
     if (server_fd_ < 0) {
         return false;
     }
@@ -412,12 +416,14 @@ void WebSocketPublisher::stop() {
     running_ = false;
     if (server_fd_ >= 0) {
         ::shutdown(server_fd_, SHUT_RDWR);
-        ::close(server_fd_);
-        server_fd_ = -1;
     }
 
     if (accept_thread_.joinable()) {
         accept_thread_.join();
+    }
+    if (server_fd_ >= 0) {
+        ::close(server_fd_);
+        server_fd_ = -1;
     }
 
     std::lock_guard<std::mutex> lock(clients_mutex_);
@@ -451,7 +457,9 @@ void WebSocketPublisher::publish(
     std::lock_guard<std::mutex> lock(clients_mutex_);
     auto it = client_fds_.begin();
     while (it != client_fds_.end()) {
-        const bool ok = send_websocket_frame(*it, metadata_payload, 0x1U) && send_websocket_frame(*it, jpeg_bytes, 0x2U);
+        const auto deadline = Clock::now() + std::chrono::milliseconds(config_.send_timeout_ms);
+        const bool ok = send_websocket_frame(*it, metadata_payload, 0x1U, deadline, running_) &&
+            send_websocket_frame(*it, jpeg_bytes, 0x2U, deadline, running_);
         if (!ok) {
             ::shutdown(*it, SHUT_RDWR);
             ::close(*it);
@@ -483,9 +491,10 @@ void WebSocketPublisher::publish_payloads(
     std::lock_guard<std::mutex> lock(clients_mutex_);
     auto it = client_fds_.begin();
     while (it != client_fds_.end()) {
-        bool ok = send_websocket_frame(*it, metadata_payload, 0x1U);
+        const auto deadline = Clock::now() + std::chrono::milliseconds(config_.send_timeout_ms);
+        bool ok = send_websocket_frame(*it, metadata_payload, 0x1U, deadline, running_);
         for (const auto payload : payloads) {
-            ok = ok && send_websocket_frame(*it, payload, 0x2U);
+            ok = ok && send_websocket_frame(*it, payload, 0x2U, deadline, running_);
         }
         if (!ok) {
             ::shutdown(*it, SHUT_RDWR);
@@ -521,7 +530,7 @@ void WebSocketPublisher::accept_loop() {
         }
 
         std::lock_guard<std::mutex> lock(clients_mutex_);
-        if (static_cast<int>(client_fds_.size()) >= config_.max_clients) {
+        if (!running_ || static_cast<int>(client_fds_.size()) >= config_.max_clients) {
             ::close(client_fd);
             continue;
         }
@@ -533,9 +542,12 @@ bool WebSocketPublisher::handshake_client(int client_fd) {
     std::string request;
     request.reserve(MAX_HANDSHAKE_BYTES);
     std::array<char, 1024> buffer{};
+    const auto deadline = Clock::now() + std::chrono::milliseconds(config_.handshake_timeout_ms);
 
     while (request.size() < MAX_HANDSHAKE_BYTES) {
-        const ssize_t received = ::recv(client_fd, buffer.data(), buffer.size(), 0);
+        if (!wait_socket(client_fd, POLLIN, deadline, running_)) return false;
+        const ssize_t received = ::recv(client_fd, buffer.data(), buffer.size(), MSG_DONTWAIT);
+        if (received < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) continue;
         if (received <= 0) {
             return false;
         }
@@ -544,6 +556,7 @@ bool WebSocketPublisher::handshake_client(int client_fd) {
             break;
         }
     }
+    if (request.size() > MAX_HANDSHAKE_BYTES || request.find("\r\n\r\n") == std::string::npos) return false;
 
     const std::string client_key = find_header_value(request, "Sec-WebSocket-Key");
     if (client_key.empty()) {
@@ -557,7 +570,7 @@ bool WebSocketPublisher::handshake_client(int client_fd) {
                                  "Sec-WebSocket-Accept: " +
                                  accept_key + "\r\n\r\n";
 
-    return send_all(client_fd, response.data(), response.size());
+    return send_all(client_fd, response.data(), response.size(), deadline, running_);
 }
 
 } // namespace catcheye::transport
