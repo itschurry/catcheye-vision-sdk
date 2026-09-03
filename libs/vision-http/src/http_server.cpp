@@ -117,6 +117,48 @@ bool parse_request_line(std::string_view request, std::string& method, std::stri
     return static_cast<bool>(iss >> method >> path >> version);
 }
 
+bool parse_request_fields(std::string_view raw, HttpRequest& request)
+{
+    const auto end = raw.find("\r\n\r\n");
+    std::size_t start = raw.find("\r\n") + 2;
+    while (start < end) {
+        const auto next = raw.find("\r\n", start);
+        const auto line = raw.substr(start, next - start);
+        const auto colon = line.find(':');
+        if (colon == 0 || colon == std::string_view::npos) return false;
+        std::string name(line.substr(0, colon));
+        for (auto& ch : name) {
+            if (!std::isalnum(static_cast<unsigned char>(ch)) && ch != '-') return false;
+            ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        }
+        const auto value = trim(std::string(line.substr(colon + 1)));
+        for (const unsigned char ch : value) if (ch < 32 || ch == 127) return false;
+        if (!request.headers.emplace(name, value).second) return false;
+        start = next + 2;
+    }
+    if (request.headers.contains("transfer-encoding")) return false;
+    const auto separator = request.path.find('?');
+    if (separator == std::string::npos) return true;
+    const auto query = request.path.substr(separator + 1);
+    request.path.resize(separator);
+    start = 0;
+    // Query tokens are deliberately restricted to unescaped identifiers and integers.
+    while (start < query.size()) {
+        const auto next = query.find('&', start);
+        const auto part = query.substr(start, next == std::string::npos ? next : next - start);
+        const auto equals = part.find('=');
+        if (equals == 0 || equals == std::string::npos || equals + 1 == part.size()) return false;
+        for (const unsigned char ch : part) {
+            if (!std::isalnum(ch) && ch != '_' && ch != '-' && ch != '=' && ch != '.') return false;
+        }
+        if (!request.query.emplace(part.substr(0, equals), part.substr(equals + 1)).second) return false;
+        if (next == std::string::npos) break;
+        start = next + 1;
+        if (start == query.size()) return false;
+    }
+    return true;
+}
+
 bool read_http_request(int client_fd, std::string& request, std::string& body,
     Clock::time_point deadline, const std::atomic<bool>& running)
 {
@@ -340,7 +382,7 @@ void HttpServer::handle_client(int client_fd)
 
     HttpRequest request;
     request.body = std::move(body);
-    if (!parse_request_line(raw_request, request.method, request.path)) {
+    if (!parse_request_line(raw_request, request.method, request.path) || !parse_request_fields(raw_request, request)) {
         send_response(client_fd, HttpResponse{400, "Bad Request", json_error_body("invalid HTTP request line")});
         return;
     }

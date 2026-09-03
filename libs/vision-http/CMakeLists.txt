@@ -31,6 +31,10 @@ target_compile_features(catcheye_vision_http PUBLIC cxx_std_20)
 if(CATCHEYE_VISION_HTTP_BUILD_TESTS)
     include(CTest)
     enable_testing()
+    add_executable(catcheye_vision_http_fields_tests tests/test_http_fields.cpp)
+    target_link_libraries(catcheye_vision_http_fields_tests PRIVATE catcheye::vision_http)
+    add_test(NAME catcheye_vision_http_fields_tests COMMAND catcheye_vision_http_fields_tests)
+    set_tests_properties(catcheye_vision_http_fields_tests PROPERTIES TIMEOUT 15)
 
     add_executable(catcheye_vision_http_tests
         tests/test_roi_api.cpp
