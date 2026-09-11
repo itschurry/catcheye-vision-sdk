@@ -42,6 +42,7 @@ class WebSocketPublisher final : public ResultPublisher {
 
   private:
     void accept_loop();
+    void remove_disconnected_clients();
     bool handshake_client(int client_fd);
 
     WebSocketPublisherConfig config_;

@@ -506,12 +506,31 @@ void WebSocketPublisher::publish_payloads(
     }
 }
 
+void WebSocketPublisher::remove_disconnected_clients() {
+    std::lock_guard<std::mutex> lock(clients_mutex_);
+    auto it = client_fds_.begin();
+    while (it != client_fds_.end()) {
+        // A peer FIN must be detected even when its unread Close frame remains
+        // queued. Waiting for a publish/send failure leaks slots while idle.
+        pollfd client{*it, POLLRDHUP, 0};
+        const int result = ::poll(&client, 1, 0);
+        if (result > 0 && (client.revents & (POLLRDHUP | POLLHUP | POLLERR | POLLNVAL)) != 0) {
+            ::shutdown(*it, SHUT_RDWR);
+            ::close(*it);
+            it = client_fds_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 void WebSocketPublisher::accept_loop() {
     pollfd pfd{};
     pfd.fd = server_fd_;
     pfd.events = POLLIN;
 
     while (running_) {
+        remove_disconnected_clients();
         const int poll_result = ::poll(&pfd, 1, POLL_TIMEOUT_MS);
         if (poll_result <= 0) {
             continue;
@@ -529,6 +548,7 @@ void WebSocketPublisher::accept_loop() {
             continue;
         }
 
+        remove_disconnected_clients();
         std::lock_guard<std::mutex> lock(clients_mutex_);
         if (!running_ || static_cast<int>(client_fds_.size()) >= config_.max_clients) {
             ::close(client_fd);

@@ -16,6 +16,7 @@
   - 처리 결과 메타데이터용 공통 메시지 계약을 정의한다
 - `libs/vision-transport`
   - runtime과 WebSocket 같은 전송 구현체 사이 경계를 정의한다
+  - WebSocket은 영상 송출이 없는 대기 중에도 종료된 TCP 연결을 정리해 접속 슬롯을 반환한다
 - `libs/vision-runtime`
   - 공통 frame loop, processor lifecycle, result publisher 연결, 종료 규칙을 담당한다
 
